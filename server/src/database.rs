@@ -155,7 +155,69 @@ impl Database {
                 artist_name TEXT,
                 progress INTEGER DEFAULT 0,
                 error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                max_retries INTEGER DEFAULT 5,
+                download_speed REAL,
+                resume_position INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ",
+            [],
+        )?;
+
+        conn.execute(
+            "
+            CREATE TABLE IF NOT EXISTS app_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT NOT NULL,
+                app_name TEXT NOT NULL,
+                bundle_id TEXT,
+                account_email TEXT NOT NULL,
+                account_region TEXT,
+                current_version TEXT,
+                artwork_url TEXT,
+                artist_name TEXT,
+                subscribed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_checked DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(app_id, account_email)
+            )
+        ",
+            [],
+        )?;
+
+        conn.execute(
+            "
+            CREATE TABLE IF NOT EXISTS batch_download_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_name TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                total_count INTEGER DEFAULT 0,
+                completed_count INTEGER DEFAULT 0,
+                failed_count INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                completed_at DATETIME
+            )
+        ",
+            [],
+        )?;
+
+        conn.execute(
+            "
+            CREATE TABLE IF NOT EXISTS batch_download_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id INTEGER NOT NULL,
+                app_id TEXT NOT NULL,
+                app_name TEXT,
+                version TEXT,
+                account_email TEXT,
+                status TEXT DEFAULT 'pending',
+                progress INTEGER DEFAULT 0,
+                error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (batch_id) REFERENCES batch_download_tasks(id) ON DELETE CASCADE
             )
         ",
             [],
@@ -220,6 +282,34 @@ impl Database {
         }
         if !has_error {
             let _ = conn.execute("ALTER TABLE download_records ADD COLUMN error TEXT", []);
+        }
+
+        let has_retry_count = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "retry_count");
+        if !has_retry_count {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN retry_count INTEGER DEFAULT 5", []);
+        }
+
+        let has_max_retries = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "max_retries");
+        if !has_max_retries {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN max_retries INTEGER DEFAULT 5", []);
+        }
+
+        let has_download_speed = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "download_speed");
+        if !has_download_speed {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN download_speed REAL", []);
+        }
+
+        let has_resume_position = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "resume_position");
+        if !has_resume_position {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN resume_position INTEGER DEFAULT 0", []);
         }
 
         let _ = conn.execute("DELETE FROM encryption_keys WHERE key_id IS NULL", []);
@@ -517,4 +607,241 @@ impl Database {
         conn.execute("DELETE FROM download_records", [])?;
         Ok(())
     }
+
+    // 订阅相关方法
+    pub fn add_subscription(
+        &self,
+        app_id: &str,
+        app_name: &str,
+        bundle_id: Option<&str>,
+        account_email: &str,
+        account_region: Option<&str>,
+        artwork_url: Option<&str>,
+        artist_name: Option<&str>,
+    ) -> Result<i64> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO app_subscriptions 
+             (app_id, app_name, bundle_id, account_email, account_region, artwork_url, artist_name, last_checked) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            params![
+                app_id,
+                app_name,
+                bundle_id,
+                account_email,
+                account_region,
+                artwork_url,
+                artist_name,
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn remove_subscription(&self, app_id: &str, account_email: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "DELETE FROM app_subscriptions WHERE app_id = ? AND account_email = ?",
+            params![app_id, account_email],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_subscriptions(&self) -> Result<Vec<Subscription>> {
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM app_subscriptions ORDER BY subscribed_at DESC")?;
+        let subs = stmt
+            .query_map([], |row| {
+                Ok(Subscription {
+                    id: row.get(0)?,
+                    app_id: row.get(1)?,
+                    app_name: row.get(2)?,
+                    bundle_id: row.get(3)?,
+                    account_email: row.get(4)?,
+                    account_region: row.get(5)?,
+                    current_version: row.get(6)?,
+                    artwork_url: row.get(7)?,
+                    artist_name: row.get(8)?,
+                    subscribed_at: row.get(9)?,
+                    last_checked: row.get(10)?,
+                    created_at: row.get(11)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(subs)
+    }
+
+    pub fn update_subscription_version(
+        &self,
+        app_id: &str,
+        account_email: &str,
+        new_version: &str,
+    ) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE app_subscriptions SET current_version = ?, last_checked = CURRENT_TIMESTAMP 
+             WHERE app_id = ? AND account_email = ?",
+            params![new_version, app_id, account_email],
+        )?;
+        Ok(())
+    }
+
+    // 批量下载相关方法
+    pub fn create_batch_task(
+        &self,
+        task_name: &str,
+        total_count: i64,
+    ) -> Result<i64> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO batch_download_tasks (task_name, total_count) VALUES (?, ?)",
+            params![task_name, total_count],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn add_batch_item(
+        &self,
+        batch_id: i64,
+        app_id: &str,
+        app_name: Option<&str>,
+        version: Option<&str>,
+        account_email: &str,
+    ) -> Result<i64> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO batch_download_items (batch_id, app_id, app_name, version, account_email) 
+             VALUES (?, ?, ?, ?, ?)",
+            params![batch_id, app_id, app_name, version, account_email],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_batch_tasks(&self) -> Result<Vec<BatchDownloadTask>> {
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM batch_download_tasks ORDER BY created_at DESC")?;
+        let tasks = stmt
+            .query_map([], |row| {
+                Ok(BatchDownloadTask {
+                    id: row.get(0)?,
+                    task_name: row.get(1)?,
+                    status: row.get(2)?,
+                    total_count: row.get(3)?,
+                    completed_count: row.get(4)?,
+                    failed_count: row.get(5)?,
+                    created_at: row.get(6)?,
+                    updated_at: row.get(7)?,
+                    completed_at: row.get(8)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(tasks)
+    }
+
+    pub fn get_batch_items(&self, batch_id: i64) -> Result<Vec<BatchDownloadItem>> {
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM batch_download_items WHERE batch_id = ?")?;
+        let items = stmt
+            .query_map(params![batch_id], |row| {
+                Ok(BatchDownloadItem {
+                    id: row.get(0)?,
+                    batch_id: row.get(1)?,
+                    app_id: row.get(2)?,
+                    app_name: row.get(3)?,
+                    version: row.get(4)?,
+                    account_email: row.get(5)?,
+                    status: row.get(6)?,
+                    progress: row.get(7)?,
+                    error: row.get(8)?,
+                    retry_count: row.get(9)?,
+                    created_at: row.get(10)?,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(items)
+    }
+
+    pub fn update_batch_item(
+        &self,
+        item_id: i64,
+        status: &str,
+        progress: i64,
+        error: Option<&str>,
+        retry_count: i64,
+    ) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE batch_download_items SET status = ?, progress = ?, error = ?, retry_count = ? WHERE id = ?",
+            params![status, progress, error, retry_count, item_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_batch_task_progress(
+        &self,
+        batch_id: i64,
+        completed_count: i64,
+        failed_count: i64,
+        status: &str,
+    ) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE batch_download_tasks SET completed_count = ?, failed_count = ?, status = ?, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = ?",
+            params![completed_count, failed_count, status, batch_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_batch_task(&self, batch_id: i64) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM batch_download_tasks WHERE id = ?", params![batch_id])?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subscription {
+    pub id: Option<i64>,
+    pub app_id: String,
+    pub app_name: String,
+    pub bundle_id: Option<String>,
+    pub account_email: String,
+    pub account_region: Option<String>,
+    pub current_version: Option<String>,
+    pub artwork_url: Option<String>,
+    pub artist_name: Option<String>,
+    pub subscribed_at: Option<String>,
+    pub last_checked: Option<String>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchDownloadTask {
+    pub id: Option<i64>,
+    pub task_name: String,
+    pub status: String,
+    pub total_count: i64,
+    pub completed_count: i64,
+    pub failed_count: i64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchDownloadItem {
+    pub id: Option<i64>,
+    pub batch_id: i64,
+    pub app_id: String,
+    pub app_name: Option<String>,
+    pub version: Option<String>,
+    pub account_email: String,
+    pub status: String,
+    pub progress: i64,
+    pub error: Option<String>,
+    pub retry_count: i64,
+    pub created_at: Option<String>,
 }

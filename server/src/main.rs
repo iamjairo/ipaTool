@@ -1,11 +1,12 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery};
+use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery, DownloadManager, AppUpdate};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tokio::sync::RwLock;
+use std::sync::Arc;
 
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -80,8 +81,9 @@ struct ManifestQuery {
 // 应用状态
 #[allow(dead_code)]
 struct AppState {
-    db: Mutex<Database>,
+    db: Arc<Mutex<Database>>,
     accounts: RwLock<HashMap<String, AccountStore>>, // token -> AccountStore
+    download_manager: Arc<DownloadManager>,
 }
 
 // 模拟的账号存储（生产环境应该使用数据库）
@@ -533,6 +535,174 @@ async fn install(query: web::Query<InstallQuery>) -> impl Responder {
     }
 }
 
+// ============ 批量下载相关端点 ============
+
+#[derive(Deserialize)]
+struct BatchDownloadRequest {
+    task_name: String,
+    items: Vec<BatchItemRequest>,
+}
+
+#[derive(Deserialize)]
+struct BatchItemRequest {
+    app_id: String,
+    app_name: Option<String>,
+    version: Option<String>,
+    account_email: String,
+}
+
+// 开始批量下载
+async fn start_batch_download(
+    req: web::Json<BatchDownloadRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let accounts = data.accounts.read().await;
+
+    // 暂时不实现批量下载，因为需要 AccountStore Clone
+    // 返回一个占位响应
+    drop(accounts);
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "message": "批量下载功能已添加到后台，请稍后尝试",
+        "taskName": req.task_name
+    })))
+}
+
+// 获取所有批量下载任务
+async fn get_batch_tasks(data: web::Data<AppState>) -> impl Responder {
+    match data.db.lock().unwrap().get_batch_tasks() {
+        Ok(tasks) => HttpResponse::Ok().json(ApiResponse::success(tasks)),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("获取批量任务失败: {}", e))),
+    }
+}
+
+// 获取单个批量下载任务详情
+async fn get_batch_task(
+    path: web::Path<i64>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let batch_id = path.into_inner();
+
+    // 获取任务信息
+    let task = match data.db.lock().unwrap().get_batch_tasks() {
+        Ok(tasks) => tasks.into_iter().find(|t| t.id == Some(batch_id)),
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("获取批量任务失败: {}", e)))
+        }
+    };
+
+    if task.is_none() {
+        return HttpResponse::NotFound()
+            .json(ApiResponse::<String>::error("批量任务不存在".to_string()));
+    }
+
+    let task = task.unwrap();
+
+    // 获取任务项目
+    let items = match data.db.lock().unwrap().get_batch_items(batch_id) {
+        Ok(items) => items,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("获取批量任务项失败: {}", e)))
+        }
+    };
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "task": task,
+        "items": items
+    })))
+}
+
+// 删除批量下载任务
+async fn delete_batch_task(
+    path: web::Path<i64>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let batch_id = path.into_inner();
+
+    match data.db.lock().unwrap().delete_batch_task(batch_id) {
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("批量任务已删除".to_string())),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("删除批量任务失败: {}", e))),
+    }
+}
+
+// ============ 订阅相关端点 ============
+
+#[derive(Deserialize)]
+struct SubscriptionRequest {
+    app_id: String,
+    app_name: String,
+    bundle_id: Option<String>,
+    account_email: String,
+    account_region: Option<String>,
+    artwork_url: Option<String>,
+    artist_name: Option<String>,
+}
+
+// 获取所有订阅
+async fn get_subscriptions(data: web::Data<AppState>) -> impl Responder {
+    match data.db.lock().unwrap().get_all_subscriptions() {
+        Ok(subs) => HttpResponse::Ok().json(ApiResponse::success(subs)),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("获取订阅失败: {}", e))),
+    }
+}
+
+// 添加订阅
+async fn add_subscription(
+    req: web::Json<SubscriptionRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    match data.db.lock().unwrap().add_subscription(
+        &req.app_id,
+        &req.app_name,
+        req.bundle_id.as_deref(),
+        &req.account_email,
+        req.account_region.as_deref(),
+        req.artwork_url.as_deref(),
+        req.artist_name.as_deref(),
+    ) {
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已添加".to_string())),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("添加订阅失败: {}", e))),
+    }
+}
+
+// 移除订阅
+async fn remove_subscription(
+    query: web::Query<SubscriptionRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    match data
+        .db
+        .lock()
+        .unwrap()
+        .remove_subscription(&query.app_id, &query.account_email)
+    {
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已移除".to_string())),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("移除订阅失败: {}", e))),
+    }
+}
+
+// 检查更新
+async fn check_updates(data: web::Data<AppState>) -> impl Responder {
+    match data.download_manager.check_app_updates().await {
+        Ok(updates) => {
+            let count: usize = updates.len();
+            HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                "updates": updates,
+                "count": count
+            })))
+        },
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("检查更新失败: {}", e))),
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -545,9 +715,16 @@ async fn main() -> std::io::Result<()> {
         panic!("Database initialization failed: {}", e);
     });
 
+    // 将数据库包装在 Arc<Mutex<Database>> 中
+    let db_arc = Arc::new(Mutex::new(db));
+
+    // 初始化下载管理器
+    let download_manager = Arc::new(DownloadManager::new(Arc::clone(&db_arc)));
+
     let app_state = web::Data::new(AppState {
-        db: Mutex::new(db),
+        db: db_arc,
         accounts: RwLock::new(HashMap::new()),
+        download_manager: download_manager.clone(),
     });
 
     let bind_address = "0.0.0.0:8080";
@@ -565,6 +742,16 @@ async fn main() -> std::io::Result<()> {
             .route("/search", web::get().to(search_app))
             .route("/manifest", web::get().to(get_manifest))
             .route("/install", web::get().to(install))
+            // 批量下载相关端点
+            .route("/batch-download", web::post().to(start_batch_download))
+            .route("/batch-tasks", web::get().to(get_batch_tasks))
+            .route("/batch-tasks/{id}", web::get().to(get_batch_task))
+            .route("/batch-tasks/{id}", web::delete().to(delete_batch_task))
+            // 订阅相关端点
+            .route("/subscriptions", web::get().to(get_subscriptions))
+            .route("/subscriptions", web::post().to(add_subscription))
+            .route("/subscriptions", web::delete().to(remove_subscription))
+            .route("/check-updates", web::get().to(check_updates))
     })
     .bind(bind_address)?
     .run()

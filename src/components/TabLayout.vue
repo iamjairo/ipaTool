@@ -86,10 +86,12 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '../stores/app'
-import { User, Download, List } from '@element-plus/icons-vue'
+import { User, Download, List, Collection, Bell } from '@element-plus/icons-vue'
 import AccountManager from './AccountManager.vue'
 import DownloadManager from './DownloadManager.vue'
 import DownloadQueue from './DownloadQueue.vue'
+import BatchDownload from './BatchDownload.vue'
+import AppSubscription from './AppSubscription.vue'
 
 const appStore = useAppStore()
 const emit = defineEmits(['app-selected', 'download-started', 'accounts-updated', 'remove-item', 'clear-queue'])
@@ -128,6 +130,16 @@ const tabs = computed(() => [
     label: '队列',
     icon: List,
     badge: appStore.taskQueue.length > 0 ? String(appStore.taskQueue.length) : null
+  },
+  {
+    id: 'batch',
+    label: '批量下载',
+    icon: Collection
+  },
+  {
+    id: 'subscription',
+    label: '订阅',
+    icon: Bell
   }
 ])
 
@@ -135,7 +147,9 @@ const currentTabComponent = computed(() => {
   const components = {
     account: AccountManager,
     download: DownloadManager,
-    queue: DownloadQueue
+    queue: DownloadQueue,
+    batch: BatchDownload,
+    subscription: AppSubscription
   }
   return components[appStore.activeTab] || DownloadManager
 })

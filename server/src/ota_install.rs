@@ -1,6 +1,5 @@
-use plist::Value;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use plist::{Dictionary, Value, XmlWriteOptions};
+use serde::Deserialize;
 
 /// OTA 安装参数
 #[derive(Debug, Deserialize)]
@@ -19,28 +18,30 @@ pub fn generate_plist(
     title: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
     // 创建 plist 数据结构
-    let mut dict = BTreeMap::new();
+    let mut dict = Dictionary::new();
 
     // 软件属性
-    let mut software_props = BTreeMap::new();
-    software_props.insert("SoftwarePackageURL".to_string(), Value::String(url));
-    software_props.insert("SoftwareVersion".to_string(), Value::String(bundle_version));
-    software_props.insert("URL".to_string(), Value::String(url));
+    let mut software_props = Dictionary::new();
+    software_props.insert("SoftwarePackageURL".into(), Value::String(url.clone()));
+    software_props.insert("SoftwareVersion".into(), Value::String(bundle_version.clone()));
+    software_props.insert("URL".into(), Value::String(url));
 
     // 元数据
-    let mut metadata = BTreeMap::new();
-    metadata.insert("bundle-identifier".to_string(), Value::String(bundle_identifier));
-    metadata.insert("bundle-version".to_string(), Value::String(bundle_version));
-    metadata.insert("title".to_string(), Value::String(title));
-    metadata.insert("kind".to_string(), Value::String("software".to_string()));
+    let mut metadata = Dictionary::new();
+    metadata.insert("bundle-identifier".into(), Value::String(bundle_identifier));
+    metadata.insert("bundle-version".into(), Value::String(bundle_version));
+    metadata.insert("title".into(), Value::String(title));
+    metadata.insert("kind".into(), Value::String("software".into()));
 
-    software_props.insert("metadata".to_string(), Value::Dictionary(metadata));
+    software_props.insert("metadata".into(), Value::Dictionary(metadata));
 
-    dict.insert("software-attributes".to_string(), Value::Dictionary(software_props));
+    dict.insert("software-attributes".into(), Value::Dictionary(software_props));
 
     // 生成 plist 字符串
     let plist_value = Value::Dictionary(dict);
-    let plist_string = plist::to_string_xml(&plist_value)?;
+    let mut plist_bytes = Vec::new();
+    plist::to_writer_xml_with_options(&mut plist_bytes, &plist_value, &XmlWriteOptions::default())?;
+    let plist_string = String::from_utf8(plist_bytes)?;
 
     Ok(plist_string)
 }
@@ -58,33 +59,35 @@ pub fn generate_mobileconfig(
     let itms_url = format!("itms-services://?action=download-manifest&url={}", encoded_manifest_url);
 
     // 创建 mobileconfig 的 Payload 数据结构
-    let mut content_dict = BTreeMap::new();
-    content_dict.insert("URL".to_string(), Value::String(itms_url));
+    let mut content_dict = Dictionary::new();
+    content_dict.insert("URL".into(), Value::String(itms_url));
 
-    let mut payload_dict = BTreeMap::new();
-    payload_dict.insert("Content".to_string(), Value::Dictionary(content_dict));
-    payload_dict.insert("Description".to_string(), Value::String("Install app".to_string()));
-    payload_dict.insert("DisplayName".to_string(), Value::String(display_name));
-    payload_dict.insert("Identifier".to_string(), Value::String(format!("com.ipatool.install.{}", uuid::Uuid::new_v4())));
-    payload_dict.insert("PayloadType".to_string(), Value::String("com.apple.developer.ota-install".to_string()));
-    payload_dict.insert("PayloadUUID".to_string(), Value::String(uuid::Uuid::new_v4().to_string()));
-    payload_dict.insert("PayloadVersion".to_string(), Value::Integer(1));
+    let mut payload_dict = Dictionary::new();
+    payload_dict.insert("Content".into(), Value::Dictionary(content_dict));
+    payload_dict.insert("Description".into(), Value::String("Install app".into()));
+    payload_dict.insert("DisplayName".into(), Value::String(display_name.clone()));
+    payload_dict.insert("Identifier".into(), Value::String(format!("com.ipatool.install.{}", uuid::Uuid::new_v4())));
+    payload_dict.insert("PayloadType".into(), Value::String("com.apple.developer.ota-install".into()));
+    payload_dict.insert("PayloadUUID".into(), Value::String(uuid::Uuid::new_v4().to_string()));
+    payload_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
     // 外层
-    let mut mobileconfig_dict = BTreeMap::new();
-    mobileconfig_dict.insert("PayloadContent".to_string(), Value::Dictionary(payload_dict));
-    mobileconfig_dict.insert("PayloadDescription".to_string(), Value::String("Install app via OTA".to_string()));
-    mobileconfig_dict.insert("PayloadDisplayName".to_string(), Value::String(display_name));
-    mobileconfig_dict.insert("PayloadIdentifier".to_string(), Value::String(format!("com.ipatool.config.{}", uuid::Uuid::new_v4())));
-    mobileconfig_dict.insert("PayloadOrganization".to_string(), Value::String("ipaTool".to_string()));
-    mobileconfig_dict.insert("PayloadRemovalDisallowed".to_string(), Value::Boolean(false));
-    mobileconfig_dict.insert("PayloadType".to_string(), Value::String("Configuration".to_string()));
-    mobileconfig_dict.insert("PayloadUUID".to_string(), Value::String(uuid::Uuid::new_v4().to_string()));
-    mobileconfig_dict.insert("PayloadVersion".to_string(), Value::Integer(1));
+    let mut mobileconfig_dict = Dictionary::new();
+    mobileconfig_dict.insert("PayloadContent".into(), Value::Dictionary(payload_dict));
+    mobileconfig_dict.insert("PayloadDescription".into(), Value::String("Install app via OTA".into()));
+    mobileconfig_dict.insert("PayloadDisplayName".into(), Value::String(display_name));
+    mobileconfig_dict.insert("PayloadIdentifier".into(), Value::String(format!("com.ipatool.config.{}", uuid::Uuid::new_v4())));
+    mobileconfig_dict.insert("PayloadOrganization".into(), Value::String("ipaTool".into()));
+    mobileconfig_dict.insert("PayloadRemovalDisallowed".into(), Value::Boolean(false));
+    mobileconfig_dict.insert("PayloadType".into(), Value::String("Configuration".into()));
+    mobileconfig_dict.insert("PayloadUUID".into(), Value::String(uuid::Uuid::new_v4().to_string()));
+    mobileconfig_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
     // 生成 mobileconfig XML 字符串
     let mobileconfig_value = Value::Dictionary(mobileconfig_dict);
-    let mobileconfig_string = plist::to_string_xml(&mobileconfig_value)?;
+    let mut mobileconfig_bytes = Vec::new();
+    plist::to_writer_xml_with_options(&mut mobileconfig_bytes, &mobileconfig_value, &XmlWriteOptions::default())?;
+    let mobileconfig_string = String::from_utf8(mobileconfig_bytes)?;
 
     Ok(mobileconfig_string)
 }
