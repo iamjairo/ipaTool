@@ -311,9 +311,31 @@ tar -xzf ipa-webtool-data-backup.tar.gz
 - `POST /login` - Apple ID 登录
 - `GET /download-url?token={token}&appid={id}&appVerId={ver}` - 获取下载链接
 - `POST /download` - 下载 IPA 文件
+- `GET /manifest?url={url}&bundle_id={id}&bundle_version={ver}&title={name}` - 生成 plist 清单文件
 - `GET /install?manifest={url}` - OTA 安装（需 HTTPS）
 
 ### OTA 安装 API
+
+**1. 生成 plist 清单文件**
+
+```
+GET /manifest?url={ipa_url}&bundle_id={bundle_id}&bundle_version={version}&title={app_name}
+```
+
+**参数说明：**
+- `url` - IPA 文件的下载 URL（需 HTTPS）
+- `bundle_id` - 应用的 Bundle ID
+- `bundle_version` - 应用版本号
+- `title` - 应用显示名称
+
+**返回：**
+- XML 格式的 plist 清单文件（Content-Type: application/x-plist）
+
+**2. 生成安装描述文件**
+
+```
+GET /install?manifest={manifest_url}
+```
 
 **请求格式：**
 ```

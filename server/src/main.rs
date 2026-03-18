@@ -1,5 +1,5 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use ipa_webtool_services::{AccountStore, Database};
+use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -67,6 +67,14 @@ struct LoginRequest {
     email: String,
     password: String,
     mfa: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ManifestQuery {
+    url: String,
+    bundle_id: String,
+    bundle_version: String,
+    title: String,
 }
 
 // 应用状态
@@ -472,6 +480,59 @@ async fn login(req: web::Json<LoginRequest>) -> impl Responder {
     }
 }
 
+// 生成 plist 清单文件
+async fn get_manifest(query: web::Query<ManifestQuery>) -> impl Responder {
+    match generate_plist(
+        query.url.clone(),
+        query.bundle_id.clone(),
+        query.bundle_version.clone(),
+        query.title.clone(),
+    ) {
+        Ok(plist) => {
+            // 返回 XML 格式的 plist 文件
+            HttpResponse::Ok()
+                .content_type("application/x-plist")
+                .insert_header(("Content-Disposition", "attachment; filename=\"manifest.plist\""))
+                .body(plist)
+        }
+        Err(e) => {
+            log::error!("Failed to generate plist: {}", e);
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("生成 plist 失败: {}", e)))
+        }
+    }
+}
+
+// OTA 安装端点 - 生成并返回 .mobileconfig 文件
+async fn install(query: web::Query<InstallQuery>) -> impl Responder {
+    log::info!("OTA install request, manifest URL: {}", query.manifest);
+
+    // 从 manifest URL 中提取应用名称作为显示名称
+    let display_name = if let Some(filename) = query.manifest.rsplit('/').next() {
+        filename
+            .trim_end_matches(".plist")
+            .trim_end_matches(".ipa")
+            .to_string()
+    } else {
+        "Application".to_string()
+    };
+
+    match generate_mobileconfig(query.manifest.clone(), display_name) {
+        Ok(mobileconfig) => {
+            // 返回 .mobileconfig 文件
+            HttpResponse::Ok()
+                .content_type("application/x-apple-aspen-config")
+                .insert_header(("Content-Disposition", "attachment; filename=\"install.mobileconfig\""))
+                .body(mobileconfig)
+        }
+        Err(e) => {
+            log::error!("Failed to generate mobileconfig: {}", e);
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("生成安装描述文件失败: {}", e)))
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
@@ -502,6 +563,8 @@ async fn main() -> std::io::Result<()> {
             .route("/download-url", web::get().to(get_download_url))
             .route("/download", web::post().to(download_ipa))
             .route("/search", web::get().to(search_app))
+            .route("/manifest", web::get().to(get_manifest))
+            .route("/install", web::get().to(install))
     })
     .bind(bind_address)?
     .run()
