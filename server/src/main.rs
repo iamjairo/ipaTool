@@ -1,3 +1,4 @@
+use actix_files as fs;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery, DownloadManager, AppUpdate};
 use reqwest::Client;
@@ -477,8 +478,18 @@ async fn login(req: web::Json<LoginRequest>) -> impl Responder {
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
             }
         }
-        Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("登录失败: {}", e))),
+        Err(e) => {
+            let err_msg = e.to_string();
+            // 如果是 JSON 解析错误，说明 Apple 返回了非 JSON 响应，给用户更友好的提示
+            if err_msg.contains("error decoding response body") || err_msg.contains("expected value") {
+                HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试开启二步验证后用应用专用密码登录。".to_string()
+                ))
+            } else {
+                HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("登录失败: {}", err_msg)))
+            }
+        }
     }
 }
 
@@ -629,6 +640,31 @@ async fn delete_batch_task(
     }
 }
 
+// ============ 下载记录端点 ============
+
+// 获取所有下载记录
+async fn get_download_records(data: web::Data<AppState>) -> impl Responder {
+    match data.db.lock().unwrap().get_all_download_records() {
+        Ok(records) => HttpResponse::Ok().json(ApiResponse::success(records)),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("获取下载记录失败: {}", e))),
+    }
+}
+
+// 删除下载记录
+async fn delete_download_record(
+    path: web::Path<i64>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let id = path.into_inner();
+
+    match data.db.lock().unwrap().delete_download_record(id) {
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("记录已删除".to_string())),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("删除记录失败: {}", e))),
+    }
+}
+
 // ============ 订阅相关端点 ============
 
 #[derive(Deserialize)]
@@ -734,24 +770,29 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::JsonConfig::default().limit(4096))
             .app_data(app_state.clone())
-            .route("/health", web::get().to(health))
-            .route("/login", web::post().to(login))
-            .route("/versions", web::get().to(get_versions))
-            .route("/download-url", web::get().to(get_download_url))
-            .route("/download", web::post().to(download_ipa))
-            .route("/search", web::get().to(search_app))
-            .route("/manifest", web::get().to(get_manifest))
-            .route("/install", web::get().to(install))
+            .route("/api/health", web::get().to(health))
+            .route("/api/login", web::post().to(login))
+            .route("/api/versions", web::get().to(get_versions))
+            .route("/api/download-url", web::get().to(get_download_url))
+            .route("/api/download", web::post().to(download_ipa))
+            .route("/api/search", web::get().to(search_app))
+            .route("/api/manifest", web::get().to(get_manifest))
+            .route("/api/install", web::get().to(install))
             // 批量下载相关端点
-            .route("/batch-download", web::post().to(start_batch_download))
-            .route("/batch-tasks", web::get().to(get_batch_tasks))
-            .route("/batch-tasks/{id}", web::get().to(get_batch_task))
-            .route("/batch-tasks/{id}", web::delete().to(delete_batch_task))
+            .route("/api/batch-download", web::post().to(start_batch_download))
+            .route("/api/batch-tasks", web::get().to(get_batch_tasks))
+            .route("/api/batch-tasks/{id}", web::get().to(get_batch_task))
+            .route("/api/batch-tasks/{id}", web::delete().to(delete_batch_task))
+            // 下载记录端点
+            .route("/api/download-records", web::get().to(get_download_records))
+            .route("/api/download-records/{id}", web::delete().to(delete_download_record))
             // 订阅相关端点
-            .route("/subscriptions", web::get().to(get_subscriptions))
-            .route("/subscriptions", web::post().to(add_subscription))
-            .route("/subscriptions", web::delete().to(remove_subscription))
-            .route("/check-updates", web::get().to(check_updates))
+            .route("/api/subscriptions", web::get().to(get_subscriptions))
+            .route("/api/subscriptions", web::post().to(add_subscription))
+            .route("/api/subscriptions", web::delete().to(remove_subscription))
+            .route("/api/check-updates", web::get().to(check_updates))
+            // 托管前端静态文件
+            .service(fs::Files::new("/", "../dist").index_file("index.html"))
     })
     .bind(bind_address)?
     .run()

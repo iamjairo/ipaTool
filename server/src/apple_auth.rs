@@ -43,7 +43,9 @@ impl Store {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             "User-Agent",
-            "Configurator/2.15 (Macintosh; OS X 11.0.0; 16G29) AppleWebKit/2603.3.8"
+            // 更新为符合 Apple 最新要求的 User-Agent (2025/2026)
+            // 使用 Configurator 2.3.0 + macOS 13.x + Safari 605
+            "Configurator/2.3.0 (Macintosh; OS X 13.5.0; 22G74) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
                 .parse()
                 .unwrap(),
         );

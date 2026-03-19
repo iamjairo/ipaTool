@@ -1,18 +1,18 @@
 <template>
   <div class="card">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
       <div class="flex items-center space-x-3">
-        <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-500 rounded-xl flex items-center justify-center shadow-lg">
+        <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-purple-500 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
           <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
         </div>
-        <div>
+        <div class="flex-shrink-0">
           <h2 class="text-xl font-bold text-gray-900 dark:text-white">批量下载</h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">{{ tasks.length }} 个批量任务</p>
         </div>
       </div>
-      <div class="flex items-center space-x-2">
+      <div class="flex items-center space-x-2 flex-shrink-0">
         <el-button @click="showCreateDialog = true" type="primary" :icon="Plus">创建批量下载</el-button>
         <el-button @click="loadTasks" :icon="Refresh">刷新</el-button>
       </div>

@@ -197,6 +197,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
 import {
 	User,
 	Lock,
@@ -280,7 +281,7 @@ const saveAccounts = () => {
 
 const loginAccount = async () => {
 	if (!newAccount.value.email || !newAccount.value.password) {
-		alert('请填写完整的账号信息')
+		ElMessage.warning('请填写完整的账号信息')
 		return
 	}
 
@@ -289,12 +290,13 @@ const loginAccount = async () => {
 		(acc) => acc.email === newAccount.value.email,
 	)
 	if (existingAccount) {
-		alert('该账号已登录，无需重复登录')
+		ElMessage.warning('该账号已登录，无需重复登录')
 		return
 	}
 
 	logging.value = true
 
+	// 尝试登录，不带MFA代码
 	try {
 		const response = await fetch(`${API_BASE}/login`, {
 			method: 'POST',
@@ -304,7 +306,7 @@ const loginAccount = async () => {
 			body: JSON.stringify({
 				email: newAccount.value.email,
 				password: newAccount.value.password,
-				code: newAccount.value.code || undefined,
+				mfa: newAccount.value.code || undefined,
 				saveCredentials: savePassword.value,
 			}),
 		})
@@ -312,13 +314,19 @@ const loginAccount = async () => {
 		const data = await response.json()
 
 		if (!data.ok) {
-			// 检查是否需要两步验证码
-			if (data.error && data.error.includes('verification code')) {
-				alert('需要两步验证码，请输入验证码后重试')
+			// 检查是否需要两步验证码（多种错误关键词匹配）
+			if (data.error && (
+				data.error.includes('verification code') || 
+				data.error.includes('two-factor') ||
+				data.error.includes('MFA') ||
+				data.error.includes('二次验证')
+			)) {
+				// 需要二次验证，提示用户在表单输入
+				ElMessage.warning('此账号需要二次验证，请在验证码输入框输入 6 位数验证码后，再次点击登录')
 				logging.value = false
 				return
 			}
-			alert(`登录失败：${data.error || '未知错误'}`)
+			ElMessage.error(`登录失败：${data.error || '未知错误'}`)
 			logging.value = false
 			return
 		}
