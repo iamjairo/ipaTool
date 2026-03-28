@@ -1,198 +1,229 @@
 <template>
-	<div class="account-manager">
-		<!-- Header -->
-		<div class="account-header">
-			<div class="header-icon">
-				<svg
-					class="w-6 h-6 text-white"
-					fill="none"
-					stroke="currentColor"
-					viewBox="0 0 24 24"
-				>
-					<path
-						stroke-linecap="round"
-						stroke-linejoin="round"
-						stroke-width="2"
-						d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-					/>
-				</svg>
-			</div>
-			<div class="header-text">
-				<h2 class="text-xl font-bold text-gray-900 dark:text-white">
-					账号管理
-				</h2>
-				<p class="text-sm text-gray-500 dark:text-gray-400">
-					管理 Apple ID 账号
-				</p>
-			</div>
-		</div>
+  <div class="account-manager">
+    <!-- Header -->
+    <div class="account-header">
+      <div class="header-icon">
+        <svg
+          class="w-6 h-6 text-white"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+          />
+        </svg>
+      </div>
+      <div class="header-text">
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white">
+          账号管理
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          管理 Apple ID 账号
+        </p>
+      </div>
+    </div>
 
-		<!-- Account List -->
-		<div v-if="accounts.length > 0" class="accounts-section">
-			<div class="section-header">
-				<h3 class="section-title">已登录账号</h3>
-				<span class="section-count">{{ accounts.length }}</span>
-			</div>
-			<div class="accounts-list">
-				<div
-					v-for="(account, index) in accounts"
-					:key="index"
-					class="account-item"
-				>
-					<div class="account-avatar">
-						<el-icon><User /></el-icon>
-					</div>
-					<div class="account-info">
-						<p class="account-email">{{ account.email }}</p>
-						<p class="account-dsid">DSID: {{ account.dsid }}</p>
-						<p class="account-region">
-							<span
-								class="region-badge"
-								:class="`region-${(account.region || 'US').toLowerCase()}`"
-							>
-								{{ getRegionLabel(account.region || 'US') }}
-							</span>
-						</p>
-					</div>
-					<div class="account-actions">
-						<el-button
-							@click="refreshAccount(index)"
-							type="primary"
-							:icon="Refresh"
-							circle
-							size="small"
-							class="refresh-button"
-							title="刷新会话"
-							:loading="refreshingIndex === index"
-						/>
-						<el-button
-							@click="removeAccount(index)"
-							type="danger"
-							:icon="Delete"
-							circle
-							size="small"
-							class="remove-button"
-							title="删除账号"
-						/>
-					</div>
-				</div>
-			</div>
-		</div>
+    <!-- Account List -->
+    <div
+      v-if="accounts.length > 0"
+      class="accounts-section"
+    >
+      <div class="section-header">
+        <h3 class="section-title">
+          已登录账号
+        </h3>
+        <span class="section-count">{{ accounts.length }}</span>
+      </div>
+      <div class="accounts-list">
+        <div
+          v-for="(account, index) in accounts"
+          :key="index"
+          class="account-item"
+        >
+          <div class="account-avatar">
+            <el-icon><User /></el-icon>
+          </div>
+          <div class="account-info">
+            <p class="account-email">
+              {{ account.email }}
+            </p>
+            <p class="account-dsid">
+              DSID: {{ account.dsid }}
+            </p>
+            <p class="account-region">
+              <span
+                class="region-badge"
+                :class="`region-${(account.region || 'US').toLowerCase()}`"
+              >
+                {{ getRegionLabel(account.region || 'US') }}
+              </span>
+            </p>
+          </div>
+          <div class="account-actions">
+            <el-button
+              type="primary"
+              :icon="Refresh"
+              circle
+              size="small"
+              class="refresh-button"
+              title="刷新会话"
+              :loading="refreshingIndex === index"
+              @click="refreshAccount(index)"
+            />
+            <el-button
+              type="danger"
+              :icon="Delete"
+              circle
+              size="small"
+              class="remove-button"
+              title="删除账号"
+              @click="removeAccount(index)"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
 
-		<div class="account-content">
-			<!-- Add Account Form -->
-			<div class="form-section">
-				<div class="form-header">
-					<h3 class="form-title">登录 Apple ID</h3>
-					<p class="form-subtitle">支持多账号登录</p>
-				</div>
-				<div class="form-fields">
-					<div class="form-field">
-						<label class="field-label">邮箱</label>
-						<el-input
-							v-model="newAccount.email"
-							type="email"
-							placeholder="your@email.com"
-							:disabled="logging"
-							size="large"
-							clearable
-							class="form-input"
-						>
-							<template #prefix>
-								<el-icon class="field-icon"><User /></el-icon>
-							</template>
-						</el-input>
-					</div>
+    <div class="account-content">
+      <!-- Add Account Form -->
+      <div class="form-section">
+        <div class="form-header">
+          <h3 class="form-title">
+            登录 Apple ID
+          </h3>
+          <p class="form-subtitle">
+            支持多账号登录
+          </p>
+        </div>
+        <div class="form-fields">
+          <div class="form-field">
+            <label class="field-label">邮箱</label>
+            <el-input
+              v-model="newAccount.email"
+              type="email"
+              placeholder="your@email.com"
+              :disabled="logging"
+              size="large"
+              clearable
+              class="form-input"
+            >
+              <template #prefix>
+                <el-icon class="field-icon">
+                  <User />
+                </el-icon>
+              </template>
+            </el-input>
+          </div>
 
-					<div class="form-field">
-						<label class="field-label">密码</label>
-						<el-input
-							v-model="newAccount.password"
-							type="password"
-							placeholder="••••••••"
-							:disabled="logging"
-							show-password
-							size="large"
-							class="form-input"
-						>
-							<template #prefix>
-								<el-icon class="field-icon"><Lock /></el-icon>
-							</template>
-						</el-input>
-					</div>
+          <div class="form-field">
+            <label class="field-label">密码</label>
+            <el-input
+              v-model="newAccount.password"
+              type="password"
+              placeholder="••••••••"
+              :disabled="logging"
+              show-password
+              size="large"
+              class="form-input"
+            >
+              <template #prefix>
+                <el-icon class="field-icon">
+                  <Lock />
+                </el-icon>
+              </template>
+            </el-input>
+          </div>
 
-					<div class="form-field">
-						<label class="field-label">验证码</label>
-						<el-input
-							v-model="newAccount.code"
-							type="text"
-							placeholder="两步验证码（如需要）"
-							:disabled="logging"
-							size="large"
-							clearable
-							class="form-input"
-						>
-							<template #prefix>
-								<el-icon class="field-icon"><Key /></el-icon>
-							</template>
-						</el-input>
-					</div>
+          <div class="form-field">
+            <label class="field-label">验证码</label>
+            <el-input
+              v-model="newAccount.code"
+              type="text"
+              placeholder="两步验证码（如需要）"
+              :disabled="logging"
+              size="large"
+              clearable
+              class="form-input"
+            >
+              <template #prefix>
+                <el-icon class="field-icon">
+                  <Key />
+                </el-icon>
+              </template>
+            </el-input>
+          </div>
 
-					<!-- 保存密码选项 -->
-					<div class="form-field">
-						<el-checkbox
-							v-model="savePassword"
-							:disabled="logging"
-							class="save-password-checkbox"
-						>
-							<span class="checkbox-label">保存密码以便下次自动登录</span>
-						</el-checkbox>
-					</div>
+          <!-- 保存密码选项 -->
+          <div class="form-field">
+            <el-checkbox
+              v-model="savePassword"
+              :disabled="logging"
+              class="save-password-checkbox"
+            >
+              <span class="checkbox-label">保存密码以便下次自动登录</span>
+            </el-checkbox>
+          </div>
 
-					<el-button
-						@click="loginAccount"
-						:disabled="logging || autoLogging || !isFormValid"
-						:loading="logging"
-						type="success"
-						size="large"
-						class="submit-button"
-					>
-						<template #icon>
-							<el-icon><Right /></el-icon>
-						</template>
-						{{ logging ? '登录中...' : '登录' }}
-					</el-button>
+          <el-button
+            :disabled="logging || autoLogging || !isFormValid"
+            :loading="logging"
+            type="success"
+            size="large"
+            class="submit-button"
+            @click="loginAccount"
+          >
+            <template #icon>
+              <el-icon><Right /></el-icon>
+            </template>
+            {{ logging ? '登录中...' : '登录' }}
+          </el-button>
 
-					<!-- 自动登录状态提示 -->
-					<div v-if="autoLogging" class="auto-login-status">
-						<el-icon class="is-loading"><Loading /></el-icon>
-						<span>正在自动登录保存的账号...</span>
-					</div>
-				</div>
-			</div>
+          <!-- 自动登录状态提示 -->
+          <div
+            v-if="autoLogging"
+            class="auto-login-status"
+          >
+            <el-icon class="is-loading">
+              <Loading />
+            </el-icon>
+            <span>正在自动登录保存的账号...</span>
+          </div>
+        </div>
+      </div>
 
-			<!-- Empty State -->
-			<div v-if="accounts.length === 0" class="empty-state">
-				<div class="empty-icon">
-					<svg
-						class="w-16 h-16 text-gray-300 dark:text-gray-600"
-						fill="none"
-						stroke="currentColor"
-						viewBox="0 0 24 24"
-					>
-						<path
-							stroke-linecap="round"
-							stroke-linejoin="round"
-							stroke-width="2"
-							d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-						/>
-					</svg>
-				</div>
-				<h3 class="empty-title\">暂无登录账号</h3>
-				<p class="empty-description">登录 Apple ID 账号以开始使用</p>
-			</div>
-		</div>
-	</div>
+      <!-- Empty State -->
+      <div
+        v-if="accounts.length === 0"
+        class="empty-state"
+      >
+        <div class="empty-icon">
+          <svg
+            class="w-16 h-16 text-gray-300 dark:text-gray-600"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+            />
+          </svg>
+        </div>
+        <h3 class="empty-title\">
+          暂无登录账号
+        </h3>
+        <p class="empty-description">
+          登录 Apple ID 账号以开始使用
+        </p>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -347,9 +378,9 @@ const loginAccount = async () => {
 		// 重置表单
 		newAccount.value = { email: '', password: '', code: '' }
 
-		alert(`登录成功：${data.email}`)
+		ElMessage.error(`登录成功：${data.email}`)
 	} catch (error) {
-		alert(`登录失败：${error.message}`)
+		ElMessage.error(`登录失败：${error.message}`)
 	} finally {
 		logging.value = false
 	}
@@ -371,11 +402,11 @@ const removeAccount = async (index) => {
 				// 更新保存的凭证列表
 				await loadSavedCredentials()
 			} else {
-				alert('删除失败')
+				ElMessage.warning('删除失败')
 			}
 		} catch (error) {
 			console.error('Failed to remove account:', error)
-			alert('删除失败')
+			ElMessage.warning('删除失败')
 		}
 	}
 }
@@ -399,15 +430,15 @@ const refreshAccount = async (index) => {
 		const data = await response.json()
 		
 		if (data.ok) {
-			alert('账号会话已刷新')
+			ElMessage.warning('账号会话已刷新')
 			// 刷新账号列表以获取最新信息
 			await fetchAccounts()
 		} else {
-			alert(`刷新失败: ${data.error}`)
+			ElMessage.error(`刷新失败: ${data.error}`)
 		}
 	} catch (error) {
 		console.error('Failed to refresh account:', error)
-		alert('刷新失败，请检查网络连接')
+		ElMessage.warning('刷新失败，请检查网络连接')
 	} finally {
 		refreshingIndex.value = null
 	}
@@ -469,7 +500,7 @@ const autoLoginAll = async () => {
 					) {
 						// 全部成功，不显示提示
 					} else {
-						alert(message)
+						ElMessage.info(message)
 					}
 				}, 500)
 			}

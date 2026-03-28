@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +26,25 @@ pub struct Credentials {
     pub auth_tag: String,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminUser {
+    pub id: Option<i64>,
+    pub username: String,
+    pub password_hash: String,
+    pub is_default: bool,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub id: Option<i64>,
+    pub token: String,
+    pub username: String,
+    pub created_at: Option<String>,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +102,7 @@ impl Database {
 
         Self::create_tables(&connection)?;
         Self::migrate_tables(&connection)?;
+        Self::seed_default_admin(&connection)?;
 
         Ok(Database {
             connection: std::sync::Mutex::new(connection),
@@ -223,6 +244,34 @@ impl Database {
             [],
         )?;
 
+        conn.execute(
+            "
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                is_default BOOLEAN DEFAULT TRUE,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ",
+            [],
+        )?;
+
+        conn.execute(
+            "
+            CREATE TABLE IF NOT EXISTS sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                username TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                expires_at DATETIME NOT NULL,
+                FOREIGN KEY (username) REFERENCES admin_users(username) ON DELETE CASCADE
+            )
+        ",
+            [],
+        )?;
+
         Ok(())
     }
 
@@ -315,6 +364,128 @@ impl Database {
         let _ = conn.execute("DELETE FROM encryption_keys WHERE key_id IS NULL", []);
 
         Ok(())
+    }
+
+    fn hash_password(password: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(password.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    fn seed_default_admin(conn: &Connection) -> Result<()> {
+        let existing = conn
+            .query_row(
+                "SELECT id FROM admin_users WHERE username = ?",
+                params!["admin"],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+
+        if existing.is_none() {
+            conn.execute(
+                "INSERT INTO admin_users (username, password_hash, is_default) VALUES (?, ?, ?)",
+                params!["admin", Self::hash_password("admin"), true],
+            )?;
+        }
+
+        Ok(())
+    }
+
+    pub fn create_admin_user(
+        &self,
+        username: &str,
+        password_hash: &str,
+        is_default: bool,
+    ) -> Result<i64> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO admin_users (username, password_hash, is_default) VALUES (?, ?, ?)",
+            params![username, password_hash, is_default],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_admin_user(&self, username: &str) -> Result<Option<AdminUser>> {
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT * FROM admin_users WHERE username = ?")?;
+        let user = stmt
+            .query_row(params![username], |row| {
+                Ok(AdminUser {
+                    id: row.get(0)?,
+                    username: row.get(1)?,
+                    password_hash: row.get(2)?,
+                    is_default: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            })
+            .optional()?;
+        Ok(user)
+    }
+
+    pub fn update_admin_password(
+        &self,
+        username: &str,
+        password_hash: &str,
+        is_default: bool,
+    ) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE admin_users SET password_hash = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?",
+            params![password_hash, is_default, username],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_admin_user(&self, username: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM admin_users WHERE username = ?", params![username])?;
+        Ok(())
+    }
+
+    pub fn create_session(&self, token: &str, username: &str, expires_at: &str) -> Result<i64> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "INSERT INTO sessions (token, username, expires_at) VALUES (?, ?, ?)",
+            params![token, username, expires_at],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn get_session(&self, token: &str) -> Result<Option<SessionRecord>> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP", [])?;
+        let mut stmt = conn.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP")?;
+        let session = stmt
+            .query_row(params![token], |row| {
+                Ok(SessionRecord {
+                    id: row.get(0)?,
+                    token: row.get(1)?,
+                    username: row.get(2)?,
+                    created_at: row.get(3)?,
+                    expires_at: row.get(4)?,
+                })
+            })
+            .optional()?;
+        Ok(session)
+    }
+
+    pub fn delete_session(&self, token: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM sessions WHERE token = ?", params![token])?;
+        Ok(())
+    }
+
+    pub fn delete_sessions_by_username(&self, username: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM sessions WHERE username = ?", params![username])?;
+        Ok(())
+    }
+
+    pub fn cleanup_expired_sessions(&self) -> Result<usize> {
+        let conn = self.connection.lock().unwrap();
+        let deleted = conn.execute("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP", [])?;
+        Ok(deleted)
     }
 
     pub fn get_all_accounts(&self) -> Result<Vec<Account>> {

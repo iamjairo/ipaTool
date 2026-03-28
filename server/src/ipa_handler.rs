@@ -1,6 +1,7 @@
 use crate::apple_auth::{AccountStore, AuthInfo, Store};
 use crate::signature::SignatureClient;
 use reqwest;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
@@ -30,7 +31,7 @@ pub struct DownloadResult {
     pub needs_purchase: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DownloadParams<'a, S: AppleAuthService> {
     pub store: &'a S,
     pub email: &'a str,
@@ -39,16 +40,18 @@ pub struct DownloadParams<'a, S: AppleAuthService> {
     pub download_path: &'a str,
     pub auto_purchase: bool,
     pub token: Option<&'a str>,
+    pub progress_callback: Option<std::sync::Arc<dyn Fn(DownloadProgress) + Send + Sync>>,
 }
 
 impl<'a, S: AppleAuthService> DownloadParams<'a, S> {
     pub fn on_progress(&self, progress: DownloadProgress) {
-        // 默认实现，什么都不做
-        let _ = progress;
+        if let Some(callback) = &self.progress_callback {
+            callback(progress);
+        }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadMetadata {
     pub bundle_display_name: String,
     pub bundle_short_version_string: String,

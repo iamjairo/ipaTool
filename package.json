@@ -12,7 +12,10 @@
     "version:sync": "./sync-version.sh",
     "version:patch": "npm version patch && ./sync-version.sh",
     "version:minor": "npm version minor && ./sync-version.sh",
-    "version:major": "npm version major && ./sync-version.sh"
+    "version:major": "npm version major && ./sync-version.sh",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "format": "prettier --write \"src/**/*.{vue,js,json,css}\""
   },
   "dependencies": {
     "@element-plus/icons-vue": "^2.3.2",
@@ -23,9 +26,15 @@
     "vue": "^3.5.13"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
+    "eslint": "^10.1.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.8.0",
+    "globals": "^17.4.0",
     "postcss": "^8.4.49",
+    "prettier": "^3.8.1",
     "tailwindcss": "^3.4.17",
     "vite": "^6.0.11"
   }

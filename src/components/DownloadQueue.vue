@@ -3,32 +3,65 @@
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center space-x-3">
         <div class="w-12 h-12 bg-gradient-to-br from-orange-500 to-red-500 rounded-xl flex items-center justify-center shadow-lg">
-          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+          <svg
+            class="w-6 h-6 text-white"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 6h16M4 10h16M4 14h16M4 18h16"
+            />
           </svg>
         </div>
         <div>
-          <h2 class="text-xl font-bold text-gray-900 dark:text-white">下载队列</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">{{ queue.length }} 个任务 | {{ records.length }} 条记录</p>
+          <h2 class="text-xl font-bold text-gray-900 dark:text-white">
+            下载队列
+          </h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            {{ queue.length }} 个任务 | {{ records.length }} 条记录
+          </p>
         </div>
       </div>
       <div class="flex items-center space-x-2">
         <button
-          @click="loadRecords"
           class="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
           title="刷新记录"
+          @click="loadRecords"
         >
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          <svg
+            class="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
           </svg>
         </button>
       </div>
     </div>
 
     <!-- 任务队列 -->
-    <div v-if="queue.length > 0" class="mb-6">
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">进行中的任务</h3>
-      <el-space direction="vertical" :size="12" fill>
+    <div
+      v-if="queue.length > 0"
+      class="mb-6"
+    >
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+        进行中的任务
+      </h3>
+      <el-space
+        direction="vertical"
+        :size="12"
+        fill
+      >
         <el-card
           v-for="task in queue"
           :key="task.id"
@@ -44,7 +77,9 @@
             />
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
-                <h3 class="font-semibold text-gray-900 dark:text-white truncate">{{ task.appName }}</h3>
+                <h3 class="font-semibold text-gray-900 dark:text-white truncate">
+                  {{ task.appName }}
+                </h3>
                 <el-tag
                   :type="task.status === 'completed' ? 'success' : task.status === 'failed' ? 'danger' : 'warning'"
                   size="small"
@@ -53,50 +88,63 @@
                   {{ task.status === 'completed' ? '已完成' : task.status === 'failed' ? '失败' : '进行中' }}
                 </el-tag>
               </div>
-              <p class="text-sm text-gray-500 dark:text-gray-400">{{ task.artistName || '未知开发者' }}</p>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                {{ task.artistName || '未知开发者' }}
+              </p>
               <div class="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
                 <span>版本: {{ task.version }}</span>
                 <span v-if="task.fileSize">大小: {{ formatFileSize(task.fileSize) }}</span>
                 <span v-if="task.progress !== undefined">进度: {{ task.progress }}%</span>
               </div>
-              <div v-if="task.status === 'completed' && task.installUrl" class="flex items-center gap-2 mt-3">
+              <div
+                v-if="task.status === 'completed' && task.installUrl"
+                class="flex items-center gap-2 mt-3"
+              >
                 <el-button
-                  @click="install(task)"
                   type="primary"
                   size="small"
                   :icon="Download"
+                  @click="install(task)"
                 >
                   安装
                 </el-button>
                 <el-button
-                  @click="removeTask(task.id)"
                   type="danger"
                   size="small"
                   :icon="Delete"
                   plain
+                  @click="removeTask(task.id)"
                 >
                   移除
                 </el-button>
               </div>
-              <div v-else-if="task.status === 'failed'" class="flex items-center gap-2 mt-3">
-                <p class="text-xs text-red-500">{{ task.error || '下载失败' }}</p>
+              <div
+                v-else-if="task.status === 'failed'"
+                class="flex items-center gap-2 mt-3"
+              >
+                <p class="text-xs text-red-500">
+                  {{ task.error || '下载失败' }}
+                </p>
                 <el-button
-                  @click="removeTask(task.id)"
                   type="danger"
                   size="small"
                   :icon="Delete"
                   plain
+                  @click="removeTask(task.id)"
                 >
                   移除
                 </el-button>
               </div>
-              <div v-else class="flex items-center gap-2 mt-3">
+              <div
+                v-else
+                class="flex items-center gap-2 mt-3"
+              >
                 <el-button
-                  @click="removeTask(task.id)"
                   type="danger"
                   size="small"
                   :icon="Delete"
                   plain
+                  @click="removeTask(task.id)"
                 >
                   取消
                 </el-button>
@@ -110,18 +158,24 @@
     <!-- 下载记录 -->
     <div v-if="records.length > 0">
       <div class="flex items-center justify-between mb-3">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">下载记录</h3>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+          下载记录
+        </h3>
         <el-button
-          @click="clearAllRecords"
           type="danger"
           size="small"
           :icon="Delete"
           plain
+          @click="clearAllRecords"
         >
           清空全部
         </el-button>
       </div>
-      <el-space direction="vertical" :size="12" fill>
+      <el-space
+        direction="vertical"
+        :size="12"
+        fill
+      >
         <el-card
           v-for="record in records"
           :key="record.id"
@@ -137,7 +191,9 @@
             />
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
-                <h3 class="font-semibold text-gray-900 dark:text-white truncate">{{ record.app_name }}</h3>
+                <h3 class="font-semibold text-gray-900 dark:text-white truncate">
+                  {{ record.app_name }}
+                </h3>
                 <el-tag
                   :type="record.status === 'completed' ? 'success' : record.status === 'failed' ? 'danger' : 'warning'"
                   size="small"
@@ -146,7 +202,9 @@
                   {{ record.status === 'completed' ? '已完成' : record.status === 'failed' ? '失败' : '下载中' }}
                 </el-tag>
               </div>
-              <p class="text-sm text-gray-500 dark:text-gray-400">{{ record.artist_name || '未知开发者' }}</p>
+              <p class="text-sm text-gray-500 dark:text-gray-400">
+                {{ record.artist_name || '未知开发者' }}
+              </p>
               <div class="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
                 <span>版本: {{ record.version || '未知' }}</span>
                 <span v-if="record.file_size">大小: {{ formatFileSize(record.file_size) }}</span>
@@ -154,29 +212,40 @@
                 <span v-if="record.status === 'downloading' && record.progress !== undefined">进度: {{ record.progress }}%</span>
               </div>
               <!-- 进度条 -->
-              <div v-if="record.status === 'downloading' && record.progress !== undefined" class="mt-2">
-                <el-progress :percentage="record.progress" :stroke-width="6" />
+              <div
+                v-if="record.status === 'downloading' && record.progress !== undefined"
+                class="mt-2"
+              >
+                <el-progress
+                  :percentage="record.progress"
+                  :stroke-width="6"
+                />
               </div>
               <!-- 错误信息 -->
-              <div v-if="record.status === 'failed' && record.error" class="mt-2">
-                <p class="text-xs text-red-500">错误: {{ record.error }}</p>
+              <div
+                v-if="record.status === 'failed' && record.error"
+                class="mt-2"
+              >
+                <p class="text-xs text-red-500">
+                  错误: {{ record.error }}
+                </p>
               </div>
               <div class="flex items-center gap-2 mt-3">
                 <el-button
                   v-if="record.status === 'completed' && record.install_url"
-                  @click="install(record)"
                   type="primary"
                   size="small"
                   :icon="Download"
+                  @click="install(record)"
                 >
                   安装
                 </el-button>
                 <el-button
-                  @click="removeRecord(record.id)"
                   type="danger"
                   size="small"
                   :icon="Delete"
                   plain
+                  @click="removeRecord(record.id)"
                 >
                   删除
                 </el-button>
@@ -188,12 +257,29 @@
     </div>
 
     <!-- Empty State -->
-    <div v-if="queue.length === 0 && records.length === 0" class="text-center py-12 text-gray-500 dark:text-gray-400">
-      <svg class="mx-auto h-16 w-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    <div
+      v-if="queue.length === 0 && records.length === 0"
+      class="text-center py-12 text-gray-500 dark:text-gray-400"
+    >
+      <svg
+        class="mx-auto h-16 w-16 mb-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+        />
       </svg>
-      <p class="text-lg font-medium">暂无下载任务和记录</p>
-      <p class="text-sm mt-2">下载的任务和记录会显示在这里</p>
+      <p class="text-lg font-medium">
+        暂无下载任务和记录
+      </p>
+      <p class="text-sm mt-2">
+        下载的任务和记录会显示在这里
+      </p>
     </div>
   </div>
 </template>
