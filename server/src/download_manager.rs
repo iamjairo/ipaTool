@@ -8,9 +8,6 @@ use std::time::{Duration, Instant};
 pub struct DownloadManager {
     db: Arc<Mutex<Database>>,
     client: Client,
-    max_retries: usize,
-    retry_delay: Duration,
-    chunk_size: usize,
 }
 
 impl DownloadManager {
@@ -23,9 +20,6 @@ impl DownloadManager {
                 .pool_idle_timeout(Duration::from_secs(90))
                 .build()
                 .unwrap_or_default(),
-            max_retries: 5,
-            retry_delay: Duration::from_millis(3000),
-            chunk_size: 5 * 1024 * 1024, // 5MB chunks
         }
     }
 

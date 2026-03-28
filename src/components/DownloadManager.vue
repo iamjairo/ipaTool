@@ -755,12 +755,12 @@ watch([selectedAccount, appid], ([newAccount, newAppid]) => {
 
 const fetchVersions = async () => {
   if (!appid.value) {
-    alert('请填写 APPID')
+    ElMessage.warning('请填写 APPID')
     return
   }
 
   if (selectedAccount.value === '' || selectedAccount.value === null) {
-    alert('请先选择账号')
+    ElMessage.warning('请先选择账号')
     return
   }
 
@@ -775,7 +775,7 @@ const fetchVersions = async () => {
     const data = await response.json()
 
     if (!data.ok) {
-      alert(`查询失败：${data.error || '未知错误'}`)
+      ElMessage.error(`查询失败：${data.error || '未知错误'}`)
       addLog(`[查询] 失败：${data.error || '未知错误'}`)
       return
     }
@@ -784,7 +784,7 @@ const fetchVersions = async () => {
     versionsFetched.value = true
     addLog(`[查询] 获取到 ${versions.value.length} 条版本记录`)
   } catch (error) {
-    alert(`查询失败：${error.message}`)
+    ElMessage.error(`查询失败：${error.message}`)
     addLog(`[查询] 失败：${error.message}`)
   } finally {
     fetchingVersions.value = false
@@ -825,11 +825,11 @@ const addCurrentSelectionToBatch = () => {
 
 const directLinkDownload = async (autoPurchase = false) => {
   if (!selectedAccount.value && selectedAccount.value !== 0) {
-    alert('请选择登录账号')
+    ElMessage.warning('请选择登录账号')
     return
   }
   if (!appid.value) {
-    alert('请填写 APPID')
+    ElMessage.warning('请填写 APPID')
     return
   }
 
@@ -861,7 +861,7 @@ const directLinkDownload = async (autoPurchase = false) => {
           return
         }
       }
-      alert(`直链获取失败：${data.error || '未知错误'}`)
+      ElMessage.error(`直链获取失败：${data.error || '未知错误'}`)
       addLog(`[直链] 失败：${data.error || '未知错误'}`)
       return
     }
@@ -878,18 +878,18 @@ const directLinkDownload = async (autoPurchase = false) => {
     a.click()
     a.remove()
   } catch (error) {
-    alert(`直链获取失败：${error.message}`)
+    ElMessage.error(`直链获取失败：${error.message}`)
     addLog(`[直链] 失败：${error.message}`)
   }
 }
 
 const startDownloadWithProgress = async (autoPurchase = false) => {
   if (!selectedAccount.value && selectedAccount.value !== 0) {
-    alert('请选择登录账号')
+    ElMessage.warning('请选择登录账号')
     return
   }
   if (!appid.value) {
-    alert('请填写 APPID')
+    ElMessage.warning('请填写 APPID')
     return
   }
 
@@ -938,7 +938,7 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
           return
         }
       }
-      alert(`创建任务失败：${data.error || '未知错误'}`)
+      ElMessage.error(`创建任务失败：${data.error || '未知错误'}`)
       addLog(`[进度] 创建任务失败：${data.error || '未知错误'}`)
       return
     }
@@ -961,7 +961,7 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     // Connect to SSE
     connectToSSE(jobId, queueItem)
   } catch (error) {
-    alert(`创建任务失败：${error.message}`)
+    ElMessage.error(`创建任务失败：${error.message}`)
     addLog(`[进度] 创建任务失败：${error.message}`)
   }
 }

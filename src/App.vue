@@ -85,7 +85,7 @@
           Made with ❤️ by <a href="https://github.com/ruanrrn" class="text-primary-600 hover:underline font-medium" target="_blank">ruanrrn</a>
         </p>
         <p class="text-xs text-gray-500 dark:text-gray-500 mb-4">
-          © 2024 IPA Tool. 现代化 IPA 下载与签名工具
+          © {{ new Date().getFullYear() }} IPA Tool. 现代化 IPA 下载与签名工具
         </p>
         <div class="flex justify-center space-x-6 text-sm">
           <a href="https://github.com/ruanrrn/ipaTool" class="text-primary-600 hover:text-primary-700 dark:hover:text-primary-500 transition-colors flex items-center space-x-1" target="_blank">

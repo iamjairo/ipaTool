@@ -347,9 +347,9 @@ const loginAccount = async () => {
 		// 重置表单
 		newAccount.value = { email: '', password: '', code: '' }
 
-		alert(`登录成功：${data.email}`)
+		ElMessage.error(`登录成功：${data.email}`)
 	} catch (error) {
-		alert(`登录失败：${error.message}`)
+		ElMessage.error(`登录失败：${error.message}`)
 	} finally {
 		logging.value = false
 	}
@@ -371,11 +371,11 @@ const removeAccount = async (index) => {
 				// 更新保存的凭证列表
 				await loadSavedCredentials()
 			} else {
-				alert('删除失败')
+				ElMessage.warning('删除失败')
 			}
 		} catch (error) {
 			console.error('Failed to remove account:', error)
-			alert('删除失败')
+			ElMessage.warning('删除失败')
 		}
 	}
 }
@@ -399,15 +399,15 @@ const refreshAccount = async (index) => {
 		const data = await response.json()
 		
 		if (data.ok) {
-			alert('账号会话已刷新')
+			ElMessage.warning('账号会话已刷新')
 			// 刷新账号列表以获取最新信息
 			await fetchAccounts()
 		} else {
-			alert(`刷新失败: ${data.error}`)
+			ElMessage.error(`刷新失败: ${data.error}`)
 		}
 	} catch (error) {
 		console.error('Failed to refresh account:', error)
-		alert('刷新失败，请检查网络连接')
+		ElMessage.warning('刷新失败，请检查网络连接')
 	} finally {
 		refreshingIndex.value = null
 	}
@@ -469,7 +469,7 @@ const autoLoginAll = async () => {
 					) {
 						// 全部成功，不显示提示
 					} else {
-						alert(message)
+						ElMessage.info(message)
 					}
 				}, 500)
 			}

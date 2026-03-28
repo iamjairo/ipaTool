@@ -142,6 +142,7 @@ impl From<&AdminUser> for AuthUserPayload {
 struct AuthenticatedAdmin {
     username: String,
     is_default: bool,
+    #[allow(dead_code)]
     session_token: String,
 }
 
