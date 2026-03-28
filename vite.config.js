@@ -21,7 +21,16 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    assetsDir: 'assets'
+    assetsDir: 'assets',
+    chunkSizeWarningLimit: 1100,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'element-plus': ['element-plus', '@element-plus/icons-vue'],
+          'vue-vendor': ['vue', 'pinia', '@vueuse/core'],
+        }
+      }
+    }
   },
   define: {
     // 生产环境使用相对路径访问 API

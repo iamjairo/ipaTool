@@ -2,33 +2,64 @@
   <div class="card">
     <div class="flex items-center space-x-3 mb-6">
       <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-xl flex items-center justify-center shadow-lg">
-        <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        <svg
+          class="w-6 h-6 text-white"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+          />
         </svg>
       </div>
       <div>
-        <h2 class="text-xl font-bold text-gray-900 dark:text-white">下载与签名</h2>
-        <p class="text-sm text-gray-500 dark:text-gray-400">搜索应用、查询版本并下载IPA文件</p>
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white">
+          下载与签名
+        </h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          搜索应用、查询版本并下载IPA文件
+        </p>
       </div>
     </div>
 
     <!-- Search Section -->
     <div class="space-y-4 mb-6">
       <!-- 账号选择提示 -->
-      <div v-if="accounts.length === 0" class="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4">
+      <div
+        v-if="accounts.length === 0"
+        class="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4"
+      >
         <div class="flex items-start space-x-3">
-          <svg class="w-5 h-5 text-orange-600 dark:text-orange-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          <svg
+            class="w-5 h-5 text-orange-600 dark:text-orange-400 mt-0.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+            />
           </svg>
           <div class="flex-1">
-            <h4 class="font-semibold text-orange-900 dark:text-orange-300">需要先登录账号</h4>
-            <p class="text-sm text-orange-700 dark:text-orange-400 mt-1">请先在"账号"标签页登录 Apple ID 账号，然后才能搜索应用。</p>
+            <h4 class="font-semibold text-orange-900 dark:text-orange-300">
+              需要先登录账号
+            </h4>
+            <p class="text-sm text-orange-700 dark:text-orange-400 mt-1">
+              请先在"账号"标签页登录 Apple ID 账号，然后才能搜索应用。
+            </p>
             <el-button 
-              @click="goToAccountTab" 
               type="warning" 
               size="small" 
-              class="mt-2"
+              class="mt-2" 
               plain
+              @click="goToAccountTab"
             >
               前往登录
             </el-button>
@@ -37,11 +68,24 @@
       </div>
 
       <!-- 账号选择区域 -->
-      <div v-else class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
+      <div
+        v-else
+        class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4"
+      >
         <div class="flex items-center justify-between">
           <div class="flex items-center space-x-2 flex-1">
-            <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              class="w-4 h-4 text-blue-600 dark:text-blue-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
             <span class="text-sm text-blue-700 dark:text-blue-400">
               搜索区域: <strong>{{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}</strong>
@@ -51,8 +95,8 @@
             v-model="selectedAccount"
             placeholder="选择账号"
             class="account-quick-select"
-            @change="handleAccountChange"
             size="small"
+            @change="handleAccountChange"
           >
             <el-option
               v-for="(account, index) in accounts"
@@ -62,7 +106,10 @@
             >
               <div class="flex items-center justify-between w-full">
                 <span class="flex-1 truncate">{{ account.email }}</span>
-                <span class="region-badge-mini ml-2" :class="`region-${(account.region || 'US').toLowerCase()}`">
+                <span
+                  class="region-badge-mini ml-2"
+                  :class="`region-${(account.region || 'US').toLowerCase()}`"
+                >
                   {{ getRegionLabel(account.region || 'US') }}
                 </span>
               </div>
@@ -75,28 +122,26 @@
       <div class="flex items-center space-x-4 p-3 bg-gray-50 dark:bg-gray-800 rounded-xl mb-3">
         <label class="flex items-center space-x-2 cursor-pointer">
           <input
-            type="radio"
             v-model="searchMode"
+            type="radio"
             value="search"
             class="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-          />
+          >
           <span class="text-sm font-medium text-gray-700 dark:text-gray-300">搜索应用</span>
         </label>
         <label class="flex items-center space-x-2 cursor-pointer">
           <input
-            type="radio"
             v-model="searchMode"
+            type="radio"
             value="appid"
             class="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
-          />
+          >
           <span class="text-sm font-medium text-gray-700 dark:text-gray-300">直接输入 App ID</span>
         </label>
       </div>
 
       <el-input
         v-model="searchQuery"
-        @input="handleSearch"
-        @keyup.enter="handleSearch"
         :placeholder="searchMode === 'search' ? '搜索应用名称、Bundle ID 或 App ID...' : '输入 App ID（纯数字）...'"
         :prefix-icon="Search"
         :loading="searching"
@@ -104,10 +149,15 @@
         clearable
         size="large"
         class="search-input"
+        @input="handleSearch"
+        @keyup.enter="handleSearch"
       />
 
       <!-- Direct App ID Confirm Button -->
-      <div v-if="searchMode === 'appid' && searchQuery && /^\d+$/.test(searchQuery.trim()) && !searching" class="flex items-center justify-between p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl mt-3">
+      <div
+        v-if="searchMode === 'appid' && searchQuery && /^\d+$/.test(searchQuery.trim()) && !searching"
+        class="flex items-center justify-between p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl mt-3"
+      >
         <div class="flex-1">
           <p class="text-sm font-medium text-yellow-800 dark:text-yellow-300">
             App ID: <span class="font-bold">{{ searchQuery.trim() }}</span>
@@ -117,39 +167,51 @@
           </p>
         </div>
         <el-button
-          @click="confirmDirectAppId"
           type="primary"
           size="default"
+          @click="confirmDirectAppId"
         >
           确认并继续
         </el-button>
       </div>
 
       <!-- Search Results -->
-      <el-scrollbar v-if="searchResults.length > 0" max-height="256px">
+      <el-scrollbar
+        v-if="searchResults.length > 0"
+        max-height="256px"
+      >
         <div class="space-y-2">
           <div
             v-for="app in searchResults"
             :key="app.trackId"
-            @click="selectApp(app)"
             class="search-result-item flex items-center space-x-4 p-3 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-all duration-200 border border-transparent hover:border-primary-300 dark:hover:border-primary-700"
+            @click="selectApp(app)"
           >
             <img 
               :src="app.artworkUrl100 || app.artworkUrl60" 
               :alt="app.trackName"
               class="w-12 h-12 rounded-lg shadow-md object-cover"
-            />
+            >
             <div class="flex-1 min-w-0">
-              <h3 class="font-semibold text-gray-900 dark:text-white truncate text-sm">{{ app.trackName }}</h3>
-              <p class="text-xs text-gray-500 dark:text-gray-400">{{ app.artistName }}</p>
+              <h3 class="font-semibold text-gray-900 dark:text-white truncate text-sm">
+                {{ app.trackName }}
+              </h3>
+              <p class="text-xs text-gray-500 dark:text-gray-400">
+                {{ app.artistName }}
+              </p>
             </div>
-            <el-icon class="w-5 h-5 text-gray-400 flex-shrink-0"><ArrowRight /></el-icon>
+            <el-icon class="w-5 h-5 text-gray-400 flex-shrink-0">
+              <ArrowRight />
+            </el-icon>
           </div>
         </div>
       </el-scrollbar>
     </div>
 
-    <div v-if="selectedApp" class="space-y-4">
+    <div
+      v-if="selectedApp"
+      class="space-y-4"
+    >
       <!-- Selected App Info -->
       <div class="selected-app-card bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-800">
         <div class="flex items-center space-x-4">
@@ -158,21 +220,38 @@
             :src="selectedApp.artworkUrl100 || selectedApp.artworkUrl60" 
             :alt="selectedApp.trackName"
             class="w-16 h-16 rounded-xl shadow-md object-cover"
-          />
+          >
           <div 
             v-else
             class="w-16 h-16 rounded-xl shadow-md object-cover bg-gradient-to-br from-gray-400 to-gray-600 flex items-center justify-center"
           >
-            <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            <svg
+              class="w-8 h-8 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              />
             </svg>
           </div>
           <div class="flex-1">
-            <h3 class="font-semibold text-gray-900 dark:text-white">{{ selectedApp.trackName }}</h3>
-            <p class="text-sm text-gray-600 dark:text-gray-400">{{ selectedApp.artistName }}</p>
+            <h3 class="font-semibold text-gray-900 dark:text-white">
+              {{ selectedApp.trackName }}
+            </h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400">
+              {{ selectedApp.artistName }}
+            </p>
             <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">
               版本: {{ selectedApp.version }} | ID: {{ selectedApp.trackId }}
-              <span v-if="selectedApp.isDirectAppId" class="ml-2 px-2 py-0.5 bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 rounded-full text-xs">
+              <span
+                v-if="selectedApp.isDirectAppId"
+                class="ml-2 px-2 py-0.5 bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 rounded-full text-xs"
+              >
                 直接输入
               </span>
             </p>
@@ -185,7 +264,10 @@
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
             选择账号
-            <span v-if="selectedAccount !== null && selectedAccount !== undefined && selectedAccount !== ''" class="ml-2 text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full">
+            <span
+              v-if="selectedAccount !== null && selectedAccount !== undefined && selectedAccount !== ''"
+              class="ml-2 text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full"
+            >
               商店区域: {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}
             </span>
           </label>
@@ -193,8 +275,8 @@
             v-model="selectedAccount"
             placeholder="请先登录账号"
             class="w-full form-select"
-            @change="handleAccountChange"
             :disabled="accounts.length === 0"
+            @change="handleAccountChange"
           >
             <el-option
               v-for="(account, index) in accounts"
@@ -204,16 +286,25 @@
             >
               <div class="flex items-center justify-between w-full">
                 <span class="flex-1 truncate">{{ account.email }}</span>
-                <span class="region-badge ml-2" :class="`region-${(account.region || 'US').toLowerCase()}`">
+                <span
+                  class="region-badge ml-2"
+                  :class="`region-${(account.region || 'US').toLowerCase()}`"
+                >
                   {{ getRegionLabel(account.region || 'US') }}
                 </span>
               </div>
             </el-option>
           </el-select>
-          <p v-if="accounts.length === 0" class="text-xs text-orange-600 dark:text-orange-400 mt-1">
+          <p
+            v-if="accounts.length === 0"
+            class="text-xs text-orange-600 dark:text-orange-400 mt-1"
+          >
             ⚠️ 请先登录账号
           </p>
-          <p v-else class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+          <p
+            v-else
+            class="text-xs text-gray-500 dark:text-gray-400 mt-1"
+          >
             ✅ 搜索和下载将使用此账号的 {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }} 商店
           </p>
         </div>
@@ -231,11 +322,11 @@
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">版本（历史版本下拉）</label>
           <el-select 
             v-model="selectedVersion"
-            @change="handleVersionChange"
             placeholder="请先查询版本"
             class="w-full form-select"
             :disabled="!versionsFetched"
             :loading="fetchingVersions"
+            @change="handleVersionChange"
           >
             <el-option
               v-for="version in versions"
@@ -256,13 +347,18 @@
           />
         </div>
 
-        <el-space direction="vertical" :size="12" fill style="width: 100%">
+        <el-space
+          direction="vertical"
+          :size="12"
+          fill
+          style="width: 100%"
+        >
           <el-button
-            @click="fetchVersions"
             :disabled="!appid || fetchingVersions"
             :loading="fetchingVersions"
             type="info"
             class="w-full action-button"
+            @click="fetchVersions"
           >
             <template #icon>
               <el-icon><Search /></el-icon>
@@ -271,10 +367,10 @@
           </el-button>
 
           <el-button
-            @click="directLinkDownload"
             :disabled="!selectedAccount && selectedAccount !== 0"
             type="info"
             class="w-full action-button"
+            @click="directLinkDownload"
           >
             <template #icon>
               <el-icon><Download /></el-icon>
@@ -283,11 +379,11 @@
           </el-button>
 
           <el-button
-            @click="startDownloadWithProgress"
             :disabled="!selectedAccount && selectedAccount !== 0"
             :loading="downloading"
             type="primary"
             class="w-full action-button"
+            @click="startDownloadWithProgress"
           >
             <template #icon>
               <el-icon><Download /></el-icon>
@@ -296,11 +392,11 @@
           </el-button>
 
           <el-button
-            @click="addCurrentSelectionToBatch"
             :disabled="!canAddToBatch"
             type="success"
             plain
             class="w-full action-button"
+            @click="addCurrentSelectionToBatch"
           >
             <template #icon>
               <el-icon><Download /></el-icon>
@@ -312,7 +408,9 @@
 
       <!-- Upload IPA Section -->
       <div class="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">上传 IPA 文件</h3>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          上传 IPA 文件
+        </h3>
         <el-upload
           ref="uploadRef"
           class="upload-demo"
@@ -327,7 +425,9 @@
           drag
         >
           <div class="el-upload__text">
-            <el-icon class="el-icon--upload"><upload-filled /></el-icon>
+            <el-icon class="el-icon--upload">
+              <upload-filled />
+            </el-icon>
             <div class="text-sm text-gray-600 dark:text-gray-400 mt-2">
               将 IPA 文件拖到此处，或<em>点击上传</em>
             </div>
@@ -338,28 +438,48 @@
         </el-upload>
 
         <!-- Upload Result -->
-        <div v-if="uploadResult.jobId" class="mt-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl">
+        <div
+          v-if="uploadResult.jobId"
+          class="mt-4 p-4 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl"
+        >
           <div class="flex items-start space-x-3">
-            <svg class="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              class="w-5 h-5 text-green-600 dark:text-green-400 mt-0.5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
             <div class="flex-1">
-              <h4 class="font-semibold text-green-900 dark:text-green-300">上传成功</h4>
-              <p class="text-sm text-green-700 dark:text-green-400 mt-1">文件：{{ uploadResult.fileName }}</p>
+              <h4 class="font-semibold text-green-900 dark:text-green-300">
+                上传成功
+              </h4>
+              <p class="text-sm text-green-700 dark:text-green-400 mt-1">
+                文件：{{ uploadResult.fileName }}
+              </p>
               
               <!-- Environment Warning for Upload -->
-              <div v-if="!isHttps && currentProtocol !== 'http:'" class="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+              <div
+                v-if="!isHttps && currentProtocol !== 'http:'"
+                class="mt-2 p-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg"
+              >
                 <p class="text-xs text-yellow-800 dark:text-yellow-300">
                   ⚠️ 当前非 HTTPS 环境，iOS 设备可能无法安装
                 </p>
               </div>
               
               <el-button 
-                @click="installUploadedIpa" 
                 type="success" 
                 size="small" 
-                class="mt-2"
+                class="mt-2" 
                 plain
+                @click="installUploadedIpa"
               >
                 点击安装
               </el-button>
@@ -368,14 +488,26 @@
         </div>
 
         <!-- Upload Progress -->
-        <div v-if="uploading" class="mt-4">
-          <el-progress :percentage="uploadProgress" :stroke-width="10" />
-          <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">正在上传...</p>
+        <div
+          v-if="uploading"
+          class="mt-4"
+        >
+          <el-progress
+            :percentage="uploadProgress"
+            :stroke-width="10"
+          />
+          <p class="text-sm text-gray-600 dark:text-gray-400 mt-2">
+            正在上传...
+          </p>
         </div>
       </div>
 
       <!-- Progress Box -->
-      <el-card v-if="showProgress" class="mt-4" shadow="never">
+      <el-card
+        v-if="showProgress"
+        class="mt-4"
+        shadow="never"
+      >
         <div class="flex justify-between items-center mb-2">
           <span class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ progressStage }}</span>
           <span class="text-sm font-bold text-blue-600 dark:text-blue-400">{{ progressPercent }}%</span>
@@ -390,15 +522,33 @@
         </el-scrollbar>
         
         <!-- Install Button -->
-        <div v-if="showInstallButton && downloadInstallUrl" class="mt-4">
+        <div
+          v-if="showInstallButton && downloadInstallUrl"
+          class="mt-4"
+        >
           <!-- Environment Warning -->
-          <div v-if="!isHttps && currentProtocol !== 'http:'" class="mb-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+          <div
+            v-if="!isHttps && currentProtocol !== 'http:'"
+            class="mb-3 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg"
+          >
             <div class="flex items-start space-x-2">
-              <svg class="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              <svg
+                class="w-5 h-5 text-yellow-600 dark:text-yellow-400 mt-0.5 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                />
               </svg>
               <div class="flex-1">
-                <p class="text-sm text-yellow-800 dark:text-yellow-300 font-medium">环境检测</p>
+                <p class="text-sm text-yellow-800 dark:text-yellow-300 font-medium">
+                  环境检测
+                </p>
                 <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
                   当前协议: {{ currentProtocol || '未知' }} | iOS 安装需要 HTTPS 环境
                 </p>
@@ -407,10 +557,10 @@
           </div>
           
           <el-button 
-            @click="installDownloadedIpa" 
             type="success" 
-            size="large"
+            size="large" 
             class="w-full"
+            @click="installDownloadedIpa"
           >
             <template #icon>
               <el-icon><Download /></el-icon>
@@ -420,7 +570,10 @@
           <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
             请在 iOS 设备的 Safari 中打开此页面并点击安装
           </p>
-          <p v-if="!isHttps" class="text-xs text-orange-600 dark:text-orange-400 mt-1 text-center">
+          <p
+            v-if="!isHttps"
+            class="text-xs text-orange-600 dark:text-orange-400 mt-1 text-center"
+          >
             ⚠️ 非 HTTPS 环境可能无法安装，点击按钮查看选项
           </p>
         </div>
@@ -428,12 +581,29 @@
     </div>
 
     <!-- Empty State -->
-    <div v-else class="text-center py-12 text-gray-500 dark:text-gray-400">
-      <svg class="mx-auto h-16 w-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+    <div
+      v-else
+      class="text-center py-12 text-gray-500 dark:text-gray-400"
+    >
+      <svg
+        class="mx-auto h-16 w-16 mb-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+        />
       </svg>
-      <p class="text-lg font-medium">未选择应用</p>
-      <p class="text-sm mt-2">请先在上方搜索并选择一个应用</p>
+      <p class="text-lg font-medium">
+        未选择应用
+      </p>
+      <p class="text-sm mt-2">
+        请先在上方搜索并选择一个应用
+      </p>
     </div>
   </div>
 </template>

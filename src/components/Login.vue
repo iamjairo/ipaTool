@@ -3,12 +3,24 @@
     <div class="w-full max-w-md mt-10">
       <div class="glass-card p-6 border border-gray-200/50 dark:border-gray-700/50">
         <div class="mb-6">
-          <h2 class="text-xl font-semibold text-gray-900 dark:text-white">管理员登录</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">默认账号：admin / admin</p>
+          <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
+            管理员登录
+          </h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            默认账号：admin / admin
+          </p>
         </div>
 
-        <el-form ref="loginFormRef" :model="loginForm" :rules="loginRules" label-position="top">
-          <el-form-item label="用户名" prop="username">
+        <el-form
+          ref="loginFormRef"
+          :model="loginForm"
+          :rules="loginRules"
+          label-position="top"
+        >
+          <el-form-item
+            label="用户名"
+            prop="username"
+          >
             <el-input
               v-model="loginForm.username"
               autocomplete="username"
@@ -18,7 +30,10 @@
             />
           </el-form-item>
 
-          <el-form-item label="密码" prop="password">
+          <el-form-item
+            label="密码"
+            prop="password"
+          >
             <el-input
               v-model="loginForm.password"
               type="password"
@@ -41,7 +56,10 @@
           </el-button>
         </el-form>
 
-        <div v-if="appStore.authState.user?.is_default" class="mt-4">
+        <div
+          v-if="appStore.authState.user?.is_default"
+          class="mt-4"
+        >
           <el-alert
             type="warning"
             show-icon
@@ -60,8 +78,16 @@
         :show-close="false"
         align-center
       >
-        <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-position="top">
-          <el-form-item label="当前密码" prop="current_password">
+        <el-form
+          ref="pwdFormRef"
+          :model="pwdForm"
+          :rules="pwdRules"
+          label-position="top"
+        >
+          <el-form-item
+            label="当前密码"
+            prop="current_password"
+          >
             <el-input
               v-model="pwdForm.current_password"
               type="password"
@@ -72,7 +98,10 @@
             />
           </el-form-item>
 
-          <el-form-item label="新密码" prop="new_password">
+          <el-form-item
+            label="新密码"
+            prop="new_password"
+          >
             <el-input
               v-model="pwdForm.new_password"
               type="password"
@@ -83,7 +112,10 @@
             />
           </el-form-item>
 
-          <el-form-item label="确认新密码" prop="confirm_password">
+          <el-form-item
+            label="确认新密码"
+            prop="confirm_password"
+          >
             <el-input
               v-model="pwdForm.confirm_password"
               type="password"
@@ -96,7 +128,11 @@
         </el-form>
 
         <template #footer>
-          <el-button type="primary" :loading="pwdLoading" @click="handleChangePassword">
+          <el-button
+            type="primary"
+            :loading="pwdLoading"
+            @click="handleChangePassword"
+          >
             修改密码
           </el-button>
         </template>

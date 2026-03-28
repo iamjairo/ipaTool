@@ -1,7 +1,13 @@
 <template>
-  <div class="tab-layout" :class="{ 'mobile-layout': isMobile, 'desktop-layout': !isMobile }">
+  <div
+    class="tab-layout"
+    :class="{ 'mobile-layout': isMobile, 'desktop-layout': !isMobile }"
+  >
     <!-- Desktop: Tab Bar at Top -->
-    <div v-if="!isMobile" class="desktop-tab-bar-wrapper">
+    <div
+      v-if="!isMobile"
+      class="desktop-tab-bar-wrapper"
+    >
       <el-tabs 
         v-model="appStore.activeTab" 
         class="tab-bar desktop-tabs"
@@ -20,12 +26,19 @@
                 :max="99"
               >
                 <div class="tab-label-content">
-                  <el-icon class="tab-icon"><component :is="tab.icon" /></el-icon>
+                  <el-icon class="tab-icon">
+                    <component :is="tab.icon" />
+                  </el-icon>
                   <span class="tab-text">{{ tab.label }}</span>
                 </div>
               </el-badge>
-              <div v-else class="tab-label-content">
-                <el-icon class="tab-icon"><component :is="tab.icon" /></el-icon>
+              <div
+                v-else
+                class="tab-label-content"
+              >
+                <el-icon class="tab-icon">
+                  <component :is="tab.icon" />
+                </el-icon>
                 <span class="tab-text">{{ tab.label }}</span>
               </div>
             </div>
@@ -35,7 +48,10 @@
     </div>
 
     <!-- Tab Content -->
-    <div class="tab-content" :class="{ 'with-desktop-tabs': !isMobile, 'with-mobile-tabs': isMobile }">
+    <div
+      class="tab-content"
+      :class="{ 'with-desktop-tabs': !isMobile, 'with-mobile-tabs': isMobile }"
+    >
       <component 
         :is="currentTabComponent" 
         v-bind="currentTabProps" 
@@ -48,7 +64,10 @@
     </div>
 
     <!-- Mobile: Tab Bar at Bottom -->
-    <div v-if="isMobile" class="mobile-tab-bar-wrapper">
+    <div
+      v-if="isMobile"
+      class="mobile-tab-bar-wrapper"
+    >
       <el-tabs 
         v-model="appStore.activeTab" 
         class="tab-bar mobile-tabs"
@@ -67,12 +86,19 @@
                 :max="99"
               >
                 <div class="tab-label-content">
-                  <el-icon class="tab-icon"><component :is="tab.icon" /></el-icon>
+                  <el-icon class="tab-icon">
+                    <component :is="tab.icon" />
+                  </el-icon>
                   <span class="tab-text">{{ tab.label }}</span>
                 </div>
               </el-badge>
-              <div v-else class="tab-label-content">
-                <el-icon class="tab-icon"><component :is="tab.icon" /></el-icon>
+              <div
+                v-else
+                class="tab-label-content"
+              >
+                <el-icon class="tab-icon">
+                  <component :is="tab.icon" />
+                </el-icon>
                 <span class="tab-text">{{ tab.label }}</span>
               </div>
             </div>
