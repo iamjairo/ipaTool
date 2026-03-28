@@ -246,7 +246,7 @@ const handleChangePassword = async () => {
       try {
         const json = await res.json()
         msg = json?.error || msg
-      } catch (_) {}
+      } catch {}
       throw new Error(msg)
     }
 

@@ -16,7 +16,7 @@
 - 🛒 **账号管理** - 多账号管理，AES-256-GCM 加密存储
 - 📥 **下载功能** - 直链下载，进度显示，队列管理
 - 📲 **IPA 安装** - 支持 OTA 在线安装（需 HTTPS 部署）
-- 🔐 **安全存储** - 本地 SQLite 数据库，密钥自动轮换
+- 🔐 **安全存储** - 本地 SQLite 数据库，独立密钥记录 + AES-256-GCM 凭证加密
 - 🎨 **现代界面** - Vue 3 + Element Plus，响应式设计，暗黑模式支持
 - ⚡ **高性能后端** - Rust + Actix-web，异步处理，内存安全
 
@@ -87,7 +87,7 @@ docker rm ipa-webtool
 **数据持久化：**
 - `-v $(pwd)/data:/app/data` - 将主机 `./data` 目录挂载到容器
 - 数据库文件：`./data/ipa-webtool.db`
-- 加密密钥：`./data/.encryption_key`
+- 管理员登录态、Apple 账号、下载记录、加密密钥记录均保存在该 SQLite 数据库中
 
 **环境变量（可选）：**
 ```bash
@@ -220,6 +220,12 @@ cp data/ipa-webtool.db.backup data/ipa-webtool.db
 tar -xzf ipa-webtool-data-backup.tar.gz
 ```
 
+### 首次登录后台
+
+- 默认管理员账号：`admin`
+- 默认密码：`admin`
+- 首次登录后会被强制要求修改密码
+
 ### 添加账号
 在"账号"标签页添加 Apple ID，密码将使用 AES-256-GCM 加密存储
 
@@ -293,7 +299,7 @@ tar -xzf ipa-webtool-data-backup.tar.gz
 
 **安全：**
 - AES-256-GCM - 账号密码加密存储
-- 密钥自动轮换机制
+- 加密密钥独立记录（轮换结构已预留）
 - 本地数据存储，无云端依赖
 
 **部署：**
@@ -303,23 +309,39 @@ tar -xzf ipa-webtool-data-backup.tar.gz
 
 ## 📡 API 端点
 
-服务器启动后，可以访问以下端点：
+服务器启动后，主要 API 端点如下（均在 `/api` 下）：
 
-- `GET /health` - 健康检查
-- `GET /versions?appid={id}&region={region}` - 查询应用版本
-- `GET /search?q={query}` - 搜索应用
-- `POST /login` - Apple ID 登录
-- `GET /download-url?token={token}&appid={id}&appVerId={ver}` - 获取下载链接
-- `POST /download` - 下载 IPA 文件
-- `GET /manifest?url={url}&bundle_id={id}&bundle_version={ver}&title={name}` - 生成 plist 清单文件
-- `GET /install?manifest={url}` - OTA 安装（需 HTTPS）
+### 管理员认证
+- `POST /api/auth/login` - 管理员登录
+- `POST /api/auth/logout` - 管理员退出登录
+- `GET /api/auth/me` - 获取当前管理员登录态
+- `POST /api/auth/change-password` - 修改管理员密码
+
+### Apple 账号与下载
+- `GET /api/health` - 健康检查
+- `POST /api/login` - Apple ID 登录
+- `GET /api/accounts` - 已登录 Apple 账号列表
+- `DELETE /api/accounts/{token}` - 删除 Apple 账号
+- `GET /api/credentials` - 已保存凭证邮箱列表（不返回密码）
+- `POST /api/auto-login` - 自动登录已保存的账号
+- `POST /api/login/refresh` - 刷新单个 Apple 账号会话
+- `GET /api/versions?appid={id}&region={region}` - 查询应用版本
+- `GET /api/search?q={query}` - 搜索应用
+- `GET /api/download-url?token={token}&appid={id}&appVerId={ver}` - 获取直链下载 URL
+- `POST /api/start-download-direct` - 创建带 SSE 进度的下载任务
+- `GET /api/progress-sse?jobId={id}` - 订阅下载任务进度
+- `GET /api/download-file?jobId={id}` - 下载后台生成的 IPA 文件
+- `GET /api/job-info?jobId={id}` - 获取下载任务信息（含 installUrl）
+- `POST /api/download` - 旧下载接口（兼容保留）
+- `GET /api/manifest?...` - 生成 plist 清单文件（支持传统参数或 `jobId`）
+- `GET /api/install?manifest={url}` - OTA 安装（需 HTTPS）
 
 ### OTA 安装 API
 
 **1. 生成 plist 清单文件**
 
 ```
-GET /manifest?url={ipa_url}&bundle_id={bundle_id}&bundle_version={version}&title={app_name}
+GET /api/manifest?url={ipa_url}&bundle_id={bundle_id}&bundle_version={version}&title={app_name}
 ```
 
 **参数说明：**
@@ -334,12 +356,12 @@ GET /manifest?url={ipa_url}&bundle_id={bundle_id}&bundle_version={version}&title
 **2. 生成安装描述文件**
 
 ```
-GET /install?manifest={manifest_url}
+GET /api/install?manifest={manifest_url}
 ```
 
 **请求格式：**
 ```
-GET /install?manifest={manifest_url}
+GET /api/install?manifest={manifest_url}
 ```
 
 **参数说明：**
@@ -364,7 +386,7 @@ window.open(installUrl);
 - ✅ 多账号管理与 AES-256-GCM 加密存储
 - ✅ 应用搜索（支持名称/Bundle ID/App ID）
 - ✅ 版本查询与历史版本下载
-- ✅ 下载队列管理与并发控制
+- ✅ 下载队列管理与进度追踪
 - ✅ 下载历史记录与进度追踪
 - ✅ OTA 在线安装（需 HTTPS 部署）
 
@@ -382,7 +404,7 @@ window.open(installUrl);
 - [x] 批量下载功能 - 支持一次选择多个应用进行批量下载，下载进度实时显示
 - [x] 下载失败自动重试机制 - 支持指数退避重试策略，最大重试 5 次
 - [x] 应用订阅和更新通知 - 订阅关注的应用，自动检测并通知版本更新
-- [x] 下载速度优化与断点续传 - 分块下载支持，提高下载速度和稳定性
+- [x] 下载速度优化与稳定性提升 - 分块下载支持，提高下载稳定性
 
 #### 新功能详细说明
 
@@ -404,11 +426,11 @@ window.open(installUrl);
 - 更新提醒通知，可一键下载新版本
 - 订阅列表管理，可随时取消订阅
 
-**4. 下载速度优化与断点续传**
-- 支持分块并发下载（5MB/块）
+**4. 下载速度优化与稳定性提升**
+- 支持分块下载（5MB/块）
 - 下载进度实时计算和显示
-- 断点续传支持，网络中断后可继续下载
-- 下载速度计算和显示（MB/s）
+- 后台 SSE 进度推送与任务状态查询
+- 下载链路稳定性优化
 
 ### 中期计划
 - [ ] Web 端体验优化（性能/稳定性/错误提示）

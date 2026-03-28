@@ -291,7 +291,7 @@ import { Download, Delete } from '@element-plus/icons-vue'
 
 const API_BASE = '/api'
 
-const props = defineProps({
+defineProps({
   queue: {
     type: Array,
     default: () => []

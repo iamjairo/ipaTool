@@ -280,7 +280,7 @@ const loadAccounts = async () => {
 	if (saved) {
 		try {
 			accounts.value = JSON.parse(saved)
-		} catch (e) {
+		} catch {
 			accounts.value = []
 		}
 	}
