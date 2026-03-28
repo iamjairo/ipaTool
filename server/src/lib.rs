@@ -7,7 +7,9 @@ pub mod ota_install;
 pub mod download_manager;
 
 pub use apple_auth::{AccountStore, AuthInfo, Store};
-pub use database::{Database, Subscription, BatchDownloadTask, BatchDownloadItem};
+pub use database::{
+    AdminUser, BatchDownloadItem, BatchDownloadTask, Database, SessionRecord, Subscription,
+};
 pub use ipa_handler::{
     download_ipa_with_account, get_license_error_message, DownloadMetadata, DownloadProgress,
     DownloadResult,

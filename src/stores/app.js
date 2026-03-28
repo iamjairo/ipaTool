@@ -29,6 +29,78 @@ export const useAppStore = defineStore('app', () => {
   // 账号更新计数器
   const accountsUpdateCounter = ref(0)
 
+  // 管理员登录态
+  const authState = ref({
+    checked: false,
+    loading: false,
+    user: null
+  })
+
+  const setAuthUser = (user) => {
+    authState.value.user = user
+  }
+
+  const checkAuth = async () => {
+    authState.value.loading = true
+    try {
+      const res = await fetch('/api/auth/me', {
+        method: 'GET',
+        credentials: 'include'
+      })
+
+      if (!res.ok) {
+        authState.value.user = null
+        return false
+      }
+
+      const json = await res.json()
+      authState.value.user = json?.data || null
+      return !!authState.value.user
+    } catch (e) {
+      authState.value.user = null
+      return false
+    } finally {
+      authState.value.checked = true
+      authState.value.loading = false
+    }
+  }
+
+  const loginAdmin = async (username, password) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      credentials: 'include',
+      body: JSON.stringify({ username, password })
+    })
+
+    if (!res.ok) {
+      let msg = '登录失败'
+      try {
+        const json = await res.json()
+        msg = json?.error || msg
+      } catch (_) {}
+      throw new Error(msg)
+    }
+
+    const json = await res.json()
+    authState.value.user = json?.data || null
+    authState.value.checked = true
+    return authState.value.user
+  }
+
+  const logoutAdmin = async () => {
+    try {
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'include'
+      })
+    } catch (_) {}
+    authState.value.user = null
+    authState.value.checked = true
+  }
+
   // 设置选中的应用
   const setSelectedApp = (app) => {
     downloadState.value.selectedApp = app
@@ -109,6 +181,7 @@ export const useAppStore = defineStore('app', () => {
     batchDraftItems,
     activeTab,
     accountsUpdateCounter,
+    authState,
     setSelectedApp,
     updateDownloadState,
     addToQueue,
@@ -118,6 +191,10 @@ export const useAppStore = defineStore('app', () => {
     addBatchDraftItem,
     removeBatchDraftItem,
     clearBatchDraftItems,
-    triggerAccountsUpdate
+    triggerAccountsUpdate,
+    setAuthUser,
+    checkAuth,
+    loginAdmin,
+    logoutAdmin
   }
 })

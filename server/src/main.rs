@@ -1,13 +1,29 @@
 use actix_files as fs;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery, DownloadManager, BatchItem};
+use actix_web::{
+    body::{EitherBody, MessageBody},
+    cookie::{time::Duration as CookieDuration, Cookie, SameSite},
+    dev::{ServiceRequest, ServiceResponse},
+    error::ErrorUnauthorized,
+    middleware::{from_fn, Next},
+    web, App, Error, FromRequest, HttpRequest, HttpResponse, HttpServer, Responder,
+};
+use chrono::{Duration, Utc};
+use futures_util::future::{ready, Ready};
+use ipa_webtool_services::{
+    generate_mobileconfig, generate_plist, AccountStore, AdminUser, BatchItem, Database,
+    DownloadManager, InstallQuery,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use std::sync::Arc;
+use uuid::Uuid;
+
+const ADMIN_SESSION_COOKIE: &str = "ipa_admin_session";
+const SESSION_TTL_DAYS: i64 = 30;
 
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -65,10 +81,44 @@ struct DownloadRequest {
 }
 
 #[derive(Deserialize)]
-struct LoginRequest {
+struct AppleLoginRequest {
     email: String,
     password: String,
     mfa: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AdminLoginRequest {
+    username: String,
+    password: String,
+}
+
+#[derive(Deserialize)]
+struct ChangePasswordRequest {
+    current_password: String,
+    new_password: String,
+}
+
+#[derive(Serialize, Clone)]
+struct AuthUserPayload {
+    username: String,
+    is_default: bool,
+}
+
+impl From<&AdminUser> for AuthUserPayload {
+    fn from(user: &AdminUser) -> Self {
+        Self {
+            username: user.username.clone(),
+            is_default: user.is_default,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AuthenticatedAdmin {
+    username: String,
+    is_default: bool,
+    session_token: String,
 }
 
 #[derive(Deserialize)]
@@ -80,17 +130,128 @@ struct ManifestQuery {
 }
 
 // 应用状态
-#[allow(dead_code)]
 struct AppState {
     db: Arc<Mutex<Database>>,
-    // NOTE: 历史遗留字段；当前 token->AccountStore 使用全局 ACCOUNTS（与 /api/login 对齐）。
-    accounts: RwLock<HashMap<String, AccountStore>>, // token -> AccountStore
     download_manager: Arc<DownloadManager>,
 }
 
 // 模拟的账号存储（生产环境应该使用数据库）
 lazy_static::lazy_static! {
     static ref ACCOUNTS: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
+}
+
+fn hash_password(password: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(password.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn session_expires_at() -> String {
+    (Utc::now() + Duration::days(SESSION_TTL_DAYS))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+fn build_session_cookie(token: &str) -> Cookie<'static> {
+    Cookie::build(ADMIN_SESSION_COOKIE, token.to_string())
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .max_age(CookieDuration::days(SESSION_TTL_DAYS))
+        .finish()
+}
+
+fn clear_session_cookie() -> Cookie<'static> {
+    let mut cookie = Cookie::build(ADMIN_SESSION_COOKIE, "")
+        .path("/")
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .finish();
+    cookie.make_removal();
+    cookie
+}
+
+fn unauthorized_response() -> HttpResponse {
+    HttpResponse::Unauthorized().json(ApiResponse::<String>::error("未登录或登录已过期".to_string()))
+}
+
+fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<AuthenticatedAdmin, String> {
+    let db = app_state
+        .db
+        .lock()
+        .map_err(|_| "认证服务暂时不可用".to_string())?;
+
+    let session = db
+        .get_session(token)
+        .map_err(|e| format!("查询登录态失败: {}", e))?
+        .ok_or_else(|| "未登录或登录已过期".to_string())?;
+
+    let user = db
+        .get_admin_user(&session.username)
+        .map_err(|e| format!("查询管理员失败: {}", e))?
+        .ok_or_else(|| {
+            let _ = db.delete_session(token);
+            "管理员账号不存在".to_string()
+        })?;
+
+    Ok(AuthenticatedAdmin {
+        username: user.username,
+        is_default: user.is_default,
+        session_token: session.token,
+    })
+}
+
+impl FromRequest for AuthenticatedAdmin {
+    type Error = Error;
+    type Future = Ready<Result<Self, Self::Error>>;
+
+    fn from_request(req: &HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
+        let app_state = match req.app_data::<web::Data<AppState>>() {
+            Some(data) => data.clone(),
+            None => return ready(Err(ErrorUnauthorized("认证服务未初始化"))),
+        };
+
+        let session_cookie = match req.cookie(ADMIN_SESSION_COOKIE) {
+            Some(cookie) => cookie,
+            None => return ready(Err(ErrorUnauthorized("未登录或登录已过期"))),
+        };
+
+        ready(
+            resolve_admin_session(app_state.get_ref(), session_cookie.value())
+                .map_err(ErrorUnauthorized),
+        )
+    }
+}
+
+async fn require_auth<B>(
+    req: ServiceRequest,
+    next: Next<B>,
+) -> Result<ServiceResponse<EitherBody<B>>, Error>
+where
+    B: MessageBody + 'static,
+{
+    let app_state = match req.app_data::<web::Data<AppState>>() {
+        Some(data) => data.clone(),
+        None => {
+            return Ok(req
+                .into_response(unauthorized_response())
+                .map_into_right_body())
+        }
+    };
+
+    let Some(session_cookie) = req.cookie(ADMIN_SESSION_COOKIE) else {
+        return Ok(req
+            .into_response(unauthorized_response())
+            .map_into_right_body());
+    };
+
+    if let Err(error_message) = resolve_admin_session(app_state.get_ref(), session_cookie.value()) {
+        return Ok(req
+            .into_response(HttpResponse::Unauthorized().json(ApiResponse::<String>::error(error_message)))
+            .map_into_right_body());
+    }
+
+    Ok(next.call(req).await?.map_into_left_body())
 }
 
 // 健康检查
@@ -267,10 +428,10 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
 // 下载 IPA
 async fn download_ipa(
     req: web::Json<DownloadRequest>,
-    data: web::Data<AppState>,
+    _data: web::Data<AppState>,
 ) -> impl Responder {
     // 验证 token
-    let accounts = data.accounts.read().await;
+    let accounts = ACCOUNTS.read().await;
     let _account_store = accounts.get(&req.token);
 
     if _account_store.is_none() {
@@ -441,7 +602,7 @@ async fn search_app(
 }
 
 // 登录
-async fn login(req: web::Json<LoginRequest>) -> impl Responder {
+async fn apple_login(req: web::Json<AppleLoginRequest>) -> impl Responder {
     let mut account_store = AccountStore::new(&req.email);
 
     match account_store
@@ -492,6 +653,133 @@ async fn login(req: web::Json<LoginRequest>) -> impl Responder {
             }
         }
     }
+}
+
+async fn admin_login(
+    req: web::Json<AdminLoginRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let username = req.username.trim();
+    let password = req.password.trim();
+
+    if username.is_empty() || password.is_empty() {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("用户名和密码不能为空".to_string()));
+    }
+
+    let db = match data.db.lock() {
+        Ok(db) => db,
+        Err(_) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("认证服务暂时不可用".to_string()))
+        }
+    };
+
+    let user = match db.get_admin_user(username) {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return HttpResponse::Unauthorized()
+                .json(ApiResponse::<String>::error("用户名或密码错误".to_string()))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("查询管理员失败: {}", e)))
+        }
+    };
+
+    if user.password_hash != hash_password(password) {
+        return HttpResponse::Unauthorized()
+            .json(ApiResponse::<String>::error("用户名或密码错误".to_string()));
+    }
+
+    let token = Uuid::new_v4().to_string();
+    if let Err(e) = db.cleanup_expired_sessions() {
+        log::warn!("清理过期登录态失败: {}", e);
+    }
+
+    if let Err(e) = db.create_session(&token, &user.username, &session_expires_at()) {
+        return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("创建登录态失败: {}", e)));
+    }
+
+    HttpResponse::Ok()
+        .cookie(build_session_cookie(&token))
+        .json(ApiResponse::success(AuthUserPayload::from(&user)))
+}
+
+async fn logout(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
+    if let Some(session_cookie) = req.cookie(ADMIN_SESSION_COOKIE) {
+        match data.db.lock() {
+            Ok(db) => {
+                if let Err(e) = db.delete_session(session_cookie.value()) {
+                    log::warn!("清理登录态失败: {}", e);
+                }
+            }
+            Err(_) => log::warn!("认证服务暂时不可用，跳过服务端 session 清理"),
+        }
+    }
+
+    HttpResponse::Ok()
+        .cookie(clear_session_cookie())
+        .json(ApiResponse::success("已退出登录".to_string()))
+}
+
+async fn me(admin: AuthenticatedAdmin) -> impl Responder {
+    HttpResponse::Ok().json(ApiResponse::success(AuthUserPayload {
+        username: admin.username,
+        is_default: admin.is_default,
+    }))
+}
+
+async fn change_password(
+    admin: AuthenticatedAdmin,
+    req: web::Json<ChangePasswordRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    if req.new_password.trim().is_empty() {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("新密码不能为空".to_string()));
+    }
+
+    if req.current_password == req.new_password {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("新密码不能与当前密码相同".to_string()));
+    }
+
+    let db = match data.db.lock() {
+        Ok(db) => db,
+        Err(_) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("认证服务暂时不可用".to_string()))
+        }
+    };
+
+    let user = match db.get_admin_user(&admin.username) {
+        Ok(Some(user)) => user,
+        Ok(None) => {
+            return HttpResponse::Unauthorized()
+                .json(ApiResponse::<String>::error("管理员账号不存在".to_string()))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("查询管理员失败: {}", e)))
+        }
+    };
+
+    if user.password_hash != hash_password(&req.current_password) {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("当前密码不正确".to_string()));
+    }
+
+    if let Err(e) = db.update_admin_password(&admin.username, &hash_password(&req.new_password), false) {
+        return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("修改密码失败: {}", e)));
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(AuthUserPayload {
+        username: admin.username,
+        is_default: false,
+    }))
 }
 
 // 生成 plist 清单文件
@@ -813,7 +1101,6 @@ async fn main() -> std::io::Result<()> {
 
     let app_state = web::Data::new(AppState {
         db: db_arc,
-        accounts: RwLock::new(HashMap::new()),
         download_manager: download_manager.clone(),
     });
 
@@ -824,27 +1111,40 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::JsonConfig::default().limit(4096))
             .app_data(app_state.clone())
-            .route("/api/health", web::get().to(health))
-            .route("/api/login", web::post().to(login))
-            .route("/api/versions", web::get().to(get_versions))
-            .route("/api/download-url", web::get().to(get_download_url))
-            .route("/api/download", web::post().to(download_ipa))
-            .route("/api/search", web::get().to(search_app))
-            .route("/api/manifest", web::get().to(get_manifest))
-            .route("/api/install", web::get().to(install))
-            // 批量下载相关端点
-            .route("/api/batch-download", web::post().to(start_batch_download))
-            .route("/api/batch-tasks", web::get().to(get_batch_tasks))
-            .route("/api/batch-tasks/{id}", web::get().to(get_batch_task))
-            .route("/api/batch-tasks/{id}", web::delete().to(delete_batch_task))
-            // 下载记录端点
-            .route("/api/download-records", web::get().to(get_download_records))
-            .route("/api/download-records/{id}", web::delete().to(delete_download_record))
-            // 订阅相关端点
-            .route("/api/subscriptions", web::get().to(get_subscriptions))
-            .route("/api/subscriptions", web::post().to(add_subscription))
-            .route("/api/subscriptions", web::delete().to(remove_subscription))
-            .route("/api/check-updates", web::get().to(check_updates))
+            .service(
+                web::scope("/api")
+                    // 公开路由：管理员认证
+                    .service(
+                        web::scope("/auth")
+                            .route("/login", web::post().to(admin_login))
+                            .route("/logout", web::post().to(logout))
+                            .route("/me", web::get().to(me))
+                            .route("/change-password", web::post().to(change_password)),
+                    )
+                    // 需要管理员认证的路由
+                    .service(
+                        web::scope("")
+                            .wrap(from_fn(require_auth))
+                            .route("/health", web::get().to(health))
+                            .route("/login", web::post().to(apple_login))
+                            .route("/versions", web::get().to(get_versions))
+                            .route("/download-url", web::get().to(get_download_url))
+                            .route("/download", web::post().to(download_ipa))
+                            .route("/search", web::get().to(search_app))
+                            .route("/manifest", web::get().to(get_manifest))
+                            .route("/install", web::get().to(install))
+                            .route("/batch-download", web::post().to(start_batch_download))
+                            .route("/batch-tasks", web::get().to(get_batch_tasks))
+                            .route("/batch-tasks/{id}", web::get().to(get_batch_task))
+                            .route("/batch-tasks/{id}", web::delete().to(delete_batch_task))
+                            .route("/download-records", web::get().to(get_download_records))
+                            .route("/download-records/{id}", web::delete().to(delete_download_record))
+                            .route("/subscriptions", web::get().to(get_subscriptions))
+                            .route("/subscriptions", web::post().to(add_subscription))
+                            .route("/subscriptions", web::delete().to(remove_subscription))
+                            .route("/check-updates", web::get().to(check_updates)),
+                    ),
+            )
             // 托管前端静态文件
             .service(fs::Files::new("/", "../dist").index_file("index.html"))
     })
