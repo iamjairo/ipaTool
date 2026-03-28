@@ -134,7 +134,8 @@ const tabs = computed(() => [
   {
     id: 'batch',
     label: '批量下载',
-    icon: Collection
+    icon: Collection,
+    badge: appStore.batchDraftItems.length > 0 ? String(appStore.batchDraftItems.length) : null
   },
   {
     id: 'subscription',

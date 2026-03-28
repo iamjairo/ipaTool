@@ -1,6 +1,6 @@
 use actix_files as fs;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery, DownloadManager, AppUpdate};
+use ipa_webtool_services::{AccountStore, Database, generate_mobileconfig, generate_plist, InstallQuery, DownloadManager, BatchItem};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -83,6 +83,7 @@ struct ManifestQuery {
 #[allow(dead_code)]
 struct AppState {
     db: Arc<Mutex<Database>>,
+    // NOTE: 历史遗留字段；当前 token->AccountStore 使用全局 ACCOUNTS（与 /api/login 对齐）。
     accounts: RwLock<HashMap<String, AccountStore>>, // token -> AccountStore
     download_manager: Arc<DownloadManager>,
 }
@@ -567,16 +568,69 @@ async fn start_batch_download(
     req: web::Json<BatchDownloadRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let accounts = data.accounts.read().await;
+    if req.task_name.trim().is_empty() {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("task_name 不能为空".to_string()));
+    }
 
-    // 暂时不实现批量下载，因为需要 AccountStore Clone
-    // 返回一个占位响应
+    if req.items.is_empty() {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("items 不能为空".to_string()));
+    }
+
+    // 从全局 ACCOUNTS 中按 email 找到已认证的 AccountStore
+    let accounts = ACCOUNTS.read().await;
+
+    let mut batch_items: Vec<BatchItem<AccountStore>> = Vec::with_capacity(req.items.len());
+
+    for item in &req.items {
+        let account = accounts
+            .values()
+            .find(|acc| acc.account_email == item.account_email)
+            .cloned();
+
+        let account = match account {
+            Some(a) => a,
+            None => {
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
+                    "账号未登录或不存在: {}",
+                    item.account_email
+                )));
+            }
+        };
+
+        if account.auth_info.is_none() {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
+                "账号尚未完成认证: {}",
+                item.account_email
+            )));
+        }
+
+        batch_items.push(BatchItem {
+            store: account,
+            app_id: item.app_id.clone(),
+            app_name: item.app_name.clone(),
+            // 这里的 version 实际是 appVerId（external_identifier），用于 download_product 的 app_ver_id 参数
+            version: item.version.clone(),
+            account_email: item.account_email.clone(),
+        });
+    }
+
     drop(accounts);
 
-    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
-        "message": "批量下载功能已添加到后台，请稍后尝试",
-        "taskName": req.task_name
-    })))
+    match data
+        .download_manager
+        .start_batch_download::<AccountStore>(&req.task_name, batch_items)
+        .await
+    {
+        Ok(batch_id) => HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+            "batchId": batch_id,
+            "taskName": req.task_name,
+            "totalCount": req.items.len(),
+        }))),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("创建批量任务失败: {}", e))),
+    }
 }
 
 // 获取所有批量下载任务

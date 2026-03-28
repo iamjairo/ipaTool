@@ -87,7 +87,33 @@
         </el-form-item>
         <el-form-item label="应用列表">
           <div class="text-sm text-gray-500 mb-2">
-            在搜索页选择多个应用后，点击"添加到批量下载"
+            在下载页选择账号、APPID 和版本后，点击"添加到批量下载"
+          </div>
+          <div v-if="draftItems.length > 0" class="w-full space-y-2">
+            <div
+              v-for="(item, index) in draftItems"
+              :key="`${item.app_id}-${item.version || 'latest'}-${item.account_email}`"
+              class="flex items-start justify-between gap-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 p-3"
+            >
+              <div class="min-w-0 flex-1">
+                <p class="font-medium text-gray-900 dark:text-white truncate">{{ item.app_name || item.app_id }}</p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  App ID: {{ item.app_id }}
+                  <span class="mx-1">|</span>
+                  账号: {{ item.account_email }}
+                </p>
+                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  版本: {{ item.version_label || item.version || '最新版本' }}
+                </p>
+              </div>
+              <el-button @click="removeDraftItem(index)" type="danger" size="small" plain>移除</el-button>
+            </div>
+            <div class="flex justify-end">
+              <el-button @click="clearDraftItems" size="small" plain>清空草稿</el-button>
+            </div>
+          </div>
+          <div v-else class="text-sm text-gray-400">
+            还没有批量下载草稿项
           </div>
         </el-form-item>
       </el-form>
@@ -153,11 +179,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, View, Delete } from '@element-plus/icons-vue'
+import { useAppStore } from '../stores/app'
 
 const API_BASE = '/api'
+const appStore = useAppStore()
 
 const tasks = ref([])
 const showCreateDialog = ref(false)
@@ -170,6 +198,8 @@ const createForm = ref({
   taskName: '',
   items: []
 })
+
+const draftItems = computed(() => appStore.batchDraftItems)
 
 // 加载批量任务
 const loadTasks = async () => {
@@ -186,9 +216,22 @@ const loadTasks = async () => {
 }
 
 // 创建批量任务
+const removeDraftItem = (index) => {
+  appStore.removeBatchDraftItem(index)
+}
+
+const clearDraftItems = () => {
+  appStore.clearBatchDraftItems()
+}
+
 const createBatchTask = async () => {
   if (!createForm.value.taskName) {
     ElMessage.warning('请输入任务名称')
+    return
+  }
+
+  if (draftItems.value.length === 0) {
+    ElMessage.warning('请先从下载页添加至少一个批量下载项')
     return
   }
 
@@ -199,7 +242,12 @@ const createBatchTask = async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         task_name: createForm.value.taskName,
-        items: createForm.value.items
+        items: draftItems.value.map(item => ({
+          app_id: item.app_id,
+          app_name: item.app_name,
+          version: item.version,
+          account_email: item.account_email
+        }))
       })
     })
     const data = await response.json()
@@ -208,6 +256,7 @@ const createBatchTask = async () => {
       ElMessage.success('批量任务创建成功')
       showCreateDialog.value = false
       createForm.value.taskName = ''
+      appStore.clearBatchDraftItems()
       await loadTasks()
     } else {
       ElMessage.error(data.error || '创建批量任务失败')

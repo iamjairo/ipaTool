@@ -294,6 +294,19 @@
             </template>
             {{ downloading ? '处理中...' : '下载并自动安装' }}
           </el-button>
+
+          <el-button
+            @click="addCurrentSelectionToBatch"
+            :disabled="!canAddToBatch"
+            type="success"
+            plain
+            class="w-full action-button"
+          >
+            <template #icon>
+              <el-icon><Download /></el-icon>
+            </template>
+            添加到批量下载
+          </el-button>
         </el-space>
       </div>
 
@@ -426,7 +439,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useAppStore } from '../stores/app'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -584,6 +597,10 @@ watch(accounts, () => {
 }, { deep: true })
 
 const API_BASE = '/api'
+
+const canAddToBatch = computed(() => {
+  return (selectedAccount.value === 0 || !!selectedAccount.value) && !!appid.value
+})
 
 const loadAccounts = async () => {
   const saved = localStorage.getItem('ipa_accounts')
@@ -776,6 +793,34 @@ const fetchVersions = async () => {
 
 const handleVersionChange = () => {
   appVerId.value = selectedVersion.value || ''
+}
+
+const addCurrentSelectionToBatch = () => {
+  if (!canAddToBatch.value) {
+    ElMessage.warning('请先选择账号并填写 APPID')
+    return
+  }
+
+  const account = accounts.value[selectedAccount.value]
+  const versionLabel = versions.value.find(v => String(v.external_identifier) === String(selectedVersion.value))?.bundle_version
+  const appStore = useAppStore()
+  const result = appStore.addBatchDraftItem({
+    app_id: String(appid.value),
+    app_name: props.selectedApp?.trackName || `App ID: ${appid.value}`,
+    version: appVerId.value || undefined,
+    version_label: versionLabel || undefined,
+    account_email: account.email,
+    account_region: account.region || 'US'
+  })
+
+  if (result.added) {
+    ElMessage.success('已加入批量下载草稿')
+  } else {
+    ElMessage.success('批量下载草稿已更新')
+  }
+
+  const appStoreRef = useAppStore()
+  appStoreRef.activeTab = 'batch'
 }
 
 const directLinkDownload = async (autoPurchase = false) => {

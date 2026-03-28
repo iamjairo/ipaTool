@@ -15,4 +15,4 @@ pub use ipa_handler::{
 pub use key_manager::KeyManager;
 pub use signature::{read_zip, SignatureClient};
 pub use ota_install::{generate_plist, generate_mobileconfig, InstallQuery};
-pub use download_manager::{DownloadManager, AppUpdate};
+pub use download_manager::{DownloadManager, BatchItem, AppUpdate};
