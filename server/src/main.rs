@@ -85,6 +85,7 @@ struct AppleLoginRequest {
     email: String,
     password: String,
     mfa: Option<String>,
+    save_credentials: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -602,7 +603,10 @@ async fn search_app(
 }
 
 // 登录
-async fn apple_login(req: web::Json<AppleLoginRequest>) -> impl Responder {
+async fn apple_login(
+    req: web::Json<AppleLoginRequest>,
+    data: web::Data<AppState>,
+) -> impl Responder {
     let mut account_store = AccountStore::new(&req.email);
 
     match account_store
@@ -618,15 +622,61 @@ async fn apple_login(req: web::Json<AppleLoginRequest>) -> impl Responder {
             if state == "success" {
                 // 生成 token
                 let token = uuid::Uuid::new_v4().to_string();
+                let dsid = result
+                    .get("dsPersonId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
-                // 存储账号信息
+                // 存储账号到内存
                 let mut accounts = ACCOUNTS.write().await;
                 accounts.insert(token.clone(), account_store);
+
+                // 持久化账号到 DB
+                if let Ok(db) = data.db.lock() {
+                    let db_account = ipa_webtool_services::Account {
+                        id: None,
+                        token: token.clone(),
+                        email: req.email.clone(),
+                        region: "US".to_string(),
+                        guid: None,
+                        cookie_user: None,
+                        cookies: None,
+                        created_at: None,
+                        updated_at: None,
+                    };
+                    let _ = db.save_account(&db_account);
+
+                    // 可选：加密保存凭证
+                    if req.save_credentials.unwrap_or(false) {
+                        if let Ok(enc_key) = ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+                            if let Ok((ct, iv, tag)) = ipa_webtool_services::crypto::encrypt(&req.password, &enc_key) {
+                                let key_id = db.get_current_encryption_key()
+                                    .ok()
+                                    .flatten()
+                                    .map(|k| k.key_id)
+                                    .unwrap_or_default();
+                                let creds = ipa_webtool_services::Credentials {
+                                    id: None,
+                                    email: req.email.clone(),
+                                    password_encrypted: ct,
+                                    key_id,
+                                    iv,
+                                    auth_tag: tag,
+                                    created_at: None,
+                                    updated_at: None,
+                                };
+                                let _ = db.save_credentials(&creds);
+                            }
+                        }
+                    }
+                }
 
                 // 返回成功响应
                 HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                     "token": token,
                     "email": req.email,
+                    "dsid": dsid,
                     "displayName": result.get("displayName"),
                 })))
             } else {
@@ -651,6 +701,326 @@ async fn apple_login(req: web::Json<AppleLoginRequest>) -> impl Responder {
                 HttpResponse::InternalServerError()
                     .json(ApiResponse::<String>::error(format!("登录失败: {}", err_msg)))
             }
+        }
+    }
+}
+
+// 获取已登录的 Apple 账号列表
+async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
+    let accounts = ACCOUNTS.read().await;
+    let mut list: Vec<serde_json::Value> = Vec::new();
+
+    for (token, store) in accounts.iter() {
+        let dsid = store
+            .auth_info
+            .as_ref()
+            .and_then(|ai| ai.ds_person_id.clone())
+            .unwrap_or_default();
+        let email = store
+            .auth_info
+            .as_ref()
+            .and_then(|ai| ai.email.clone())
+            .unwrap_or_else(|| store.account_email.clone());
+        let display_name = store
+            .auth_info
+            .as_ref()
+            .and_then(|ai| ai.display_name.clone());
+
+        list.push(serde_json::json!({
+            "token": token,
+            "email": email,
+            "dsid": dsid,
+            "region": "US",
+            "displayName": display_name,
+        }));
+    }
+
+    // 补充 DB 中有但内存中没有的账号（服务重启后恢复）
+    if let Ok(db) = data.db.lock() {
+        if let Ok(db_accounts) = db.get_all_accounts() {
+            let tokens_set: std::collections::HashSet<_> =
+                accounts.keys().cloned().collect();
+            for acc in db_accounts {
+                if !tokens_set.contains(&acc.token) {
+                    list.push(serde_json::json!({
+                        "token": acc.token,
+                        "email": acc.email,
+                        "dsid": "",
+                        "region": acc.region,
+                    }));
+                }
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(list))
+}
+
+// 删除 Apple 账号
+async fn delete_account(
+    token: web::Path<String>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let token = token.into_inner();
+
+    // 从内存删除
+    let mut accounts = ACCOUNTS.write().await;
+    let removed = accounts.remove(&token).is_some();
+
+    // 从 DB 删除
+    if let Ok(db) = data.db.lock() {
+        let _ = db.delete_account(&token);
+        // 同时删除该 email 的凭证
+        if let Some(email) = accounts // already removed, check if there's another entry
+            .values()
+            .find(|a| a.account_email.is_empty())
+            .map(|a| a.account_email.clone())
+        {
+            let _ = db.delete_credentials(&email);
+        }
+    }
+
+    if removed {
+        HttpResponse::Ok().json(ApiResponse::success("已删除"))
+    } else {
+        HttpResponse::Ok().json(ApiResponse::success("已删除（仅数据库记录）"))
+    }
+}
+
+// 获取已保存的凭证邮箱列表（不返回密码）
+async fn get_credentials_list(data: web::Data<AppState>) -> impl Responder {
+    let db = match data.db.lock() {
+        Ok(db) => db,
+        Err(_) => return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error("数据库不可用".to_string())),
+    };
+
+    match db.get_all_credentials() {
+        Ok(creds) => {
+            let emails: Vec<serde_json::Value> = creds
+                .iter()
+                .map(|c| serde_json::json!({ "email": c.email }))
+                .collect();
+            HttpResponse::Ok().json(ApiResponse::success(emails))
+        }
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e))),
+    }
+}
+
+// 自动登录所有保存的凭证
+async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
+    let db = match data.db.lock() {
+        Ok(db) => db,
+        Err(_) => return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error("数据库不可用".to_string())),
+    };
+
+    let credentials = match db.get_all_credentials() {
+        Ok(c) => c,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
+        }
+    };
+
+    // 确保 encryption key 可用
+    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+        Ok(k) => k,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("加密密钥初始化失败: {}", e)))
+        }
+    };
+
+    // 释放 DB 锁，后续操作需要异步
+    drop(db);
+
+    let mut success = Vec::new();
+    let mut need_code = Vec::new();
+    let mut failed = Vec::new();
+
+    let accounts = ACCOUNTS.read().await;
+    // 收集已登录的邮箱列表
+    let logged_in_emails: std::collections::HashSet<String> = accounts
+        .values()
+        .map(|a| a.account_email.clone())
+        .collect();
+    drop(accounts);
+
+    for cred in &credentials {
+        // 解密密码
+        let db2 = match data.db.lock() {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let password = match ipa_webtool_services::crypto::decrypt(
+            &cred.password_encrypted,
+            &cred.iv,
+            &cred.auth_tag,
+            &enc_key,
+        ) {
+            Ok(p) => p,
+            Err(_) => {
+                failed.push(serde_json::json!({ "email": cred.email, "error": "解密失败" }));
+                continue;
+            }
+        };
+        drop(db2);
+
+        // 检查是否已登录
+        if logged_in_emails.contains(&cred.email) {
+            success.push(serde_json::json!({
+                "email": cred.email,
+                "alreadyLoggedIn": true,
+            }));
+            continue;
+        }
+
+        // 尝试登录
+        let mut store = AccountStore::new(&cred.email);
+        match store.authenticate(&password, None).await {
+            Ok(result) => {
+                let state = result.get("_state").and_then(|v| v.as_str()).unwrap_or("failure");
+                if state == "success" {
+                    let token = uuid::Uuid::new_v4().to_string();
+                    let dsid = result
+                        .get("dsPersonId")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    let mut accounts = ACCOUNTS.write().await;
+                    accounts.insert(token.clone(), store);
+
+                    // 持久化
+                    if let Ok(db) = data.db.lock() {
+                        let db_account = ipa_webtool_services::Account {
+                            id: None,
+                            token: token.clone(),
+                            email: cred.email.clone(),
+                            region: "US".to_string(),
+                            guid: None,
+                            cookie_user: None,
+                            cookies: None,
+                            created_at: None,
+                            updated_at: None,
+                        };
+                        let _ = db.save_account(&db_account);
+                    }
+
+                    success.push(serde_json::json!({
+                        "email": cred.email,
+                        "token": token,
+                        "dsid": dsid,
+                        "alreadyLoggedIn": false,
+                    }));
+                } else {
+                    let err_msg = result
+                        .get("customerMessage")
+                        .or(result.get("failureType"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("登录失败");
+
+                    if err_msg.contains("verification code") || err_msg.contains("two-factor") || err_msg.contains("MFA") {
+                        need_code.push(serde_json::json!({ "email": cred.email }));
+                    } else {
+                        failed.push(serde_json::json!({ "email": cred.email, "error": err_msg }));
+                    }
+                }
+            }
+            Err(e) => {
+                failed.push(serde_json::json!({ "email": cred.email, "error": e.to_string() }));
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "results": { "success": success, "needCode": need_code, "failed": failed }
+    })))
+}
+
+// 刷新账号会话（重新认证）
+async fn refresh_login(
+    req: web::Json<serde_json::Value>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let token = match req.get("token").and_then(|v| v.as_str()) {
+        Some(t) => t.to_string(),
+        None => return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("缺少 token".to_string())),
+    };
+
+    // 查找现有账号
+    let accounts = ACCOUNTS.read().await;
+    let email = match accounts.get(&token) {
+        Some(store) => store.account_email.clone(),
+        None => {
+            return HttpResponse::NotFound()
+                .json(ApiResponse::<String>::error("账号不存在".to_string()))
+        }
+    };
+    drop(accounts);
+
+    // 尝试从 DB 获取保存的凭证
+    let db = match data.db.lock() {
+        Ok(db) => db,
+        Err(_) => return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error("数据库不可用".to_string())),
+    };
+
+    let cred = match db.get_credentials(&email) {
+        Ok(Some(c)) => c,
+        _ => {
+            return HttpResponse::BadRequest()
+                .json(ApiResponse::<String>::error("未找到保存的密码，无法自动刷新。请重新登录。".to_string()))
+        }
+    };
+
+    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+        Ok(k) => k,
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
+        }
+    };
+
+    let password = match ipa_webtool_services::crypto::decrypt(
+        &cred.password_encrypted, &cred.iv, &cred.auth_tag, &enc_key,
+    ) {
+        Ok(p) => p,
+        Err(_) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+        }
+    };
+    drop(db);
+
+    // 重新认证
+    let mut store = AccountStore::new(&email);
+    match store.authenticate(&password, None).await {
+        Ok(result) => {
+            let state = result.get("_state").and_then(|v| v.as_str()).unwrap_or("failure");
+            if state == "success" {
+                // 更新内存中的账号
+                let mut accounts = ACCOUNTS.write().await;
+                accounts.insert(token.clone(), store);
+                HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                    "ok": true,
+                    "email": email,
+                })))
+            } else {
+                let err_msg = result
+                    .get("customerMessage")
+                    .or(result.get("failureType"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("刷新失败");
+                HttpResponse::BadRequest().json(ApiResponse::<String>::error(err_msg.to_string()))
+            }
+        }
+        Err(e) => {
+            HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("刷新失败: {}", e)))
         }
     }
 }
@@ -1127,6 +1497,11 @@ async fn main() -> std::io::Result<()> {
                             .wrap(from_fn(require_auth))
                             .route("/health", web::get().to(health))
                             .route("/login", web::post().to(apple_login))
+                            .route("/accounts", web::get().to(get_account_list))
+                            .route("/accounts/{token}", web::delete().to(delete_account))
+                            .route("/credentials", web::get().to(get_credentials_list))
+                            .route("/auto-login", web::post().to(auto_login_all))
+                            .route("/login/refresh", web::post().to(refresh_login))
                             .route("/versions", web::get().to(get_versions))
                             .route("/download-url", web::get().to(get_download_url))
                             .route("/download", web::post().to(download_ipa))
