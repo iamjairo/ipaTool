@@ -182,6 +182,7 @@ impl DownloadManager {
             download_path: "../downloads",
             auto_purchase: false,
             token: None,
+            progress_callback: None,
         };
 
         download_ipa_with_account(params).await
