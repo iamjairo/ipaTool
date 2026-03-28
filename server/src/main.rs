@@ -166,6 +166,8 @@ struct AppState {
 // 模拟的账号存储（生产环境应该使用数据库）
 lazy_static::lazy_static! {
     static ref ACCOUNTS: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
+    // MFA 第一轮失败后暂存 AccountStore（保留 GUID），等待用户提交验证码后复用
+    static ref PENDING_MFA: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
 }
 
 fn hash_password(password: &str) -> String {
@@ -959,7 +961,14 @@ async fn apple_login(
     req: web::Json<AppleLoginRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let mut account_store = AccountStore::new(&req.email);
+    // 如果有 MFA code，优先复用第一轮暂存的 AccountStore（保留 GUID）
+    // 否则创建新的
+    let mut account_store = if req.mfa.is_some() {
+        let mut pending = PENDING_MFA.write().await;
+        pending.remove(&req.email).unwrap_or_else(|| AccountStore::new(&req.email))
+    } else {
+        AccountStore::new(&req.email)
+    };
 
     match account_store
         .authenticate(&req.password, req.mfa.as_deref())
@@ -972,6 +981,12 @@ async fn apple_login(
                 .unwrap_or("failure");
 
             if state == "success" {
+                // 清理可能残留的 pending MFA 条目
+                {
+                    let mut pending = PENDING_MFA.write().await;
+                    pending.remove(&req.email);
+                }
+
                 // 生成 token
                 let token = uuid::Uuid::new_v4().to_string();
                 let dsid = result
@@ -1037,12 +1052,23 @@ async fn apple_login(
                     "displayName": result.get("displayName"),
                 })))
             } else {
-                // 返回失败响应
+                // 检查是否是 MFA 要求
                 let error_msg = result
                     .get("customerMessage")
                     .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("登录失败");
+
+                let needs_mfa = error_msg.to_lowercase().contains("verification code")
+                    || error_msg.to_lowercase().contains("two-factor")
+                    || error_msg.to_lowercase().contains("mfa")
+                    || error_msg.contains("二次验证");
+
+                if needs_mfa && req.mfa.is_none() {
+                    // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
+                    let mut pending = PENDING_MFA.write().await;
+                    pending.insert(req.email.clone(), account_store);
+                }
 
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
             }
