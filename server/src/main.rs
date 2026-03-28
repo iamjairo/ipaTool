@@ -1122,22 +1122,19 @@ async fn delete_account(token: web::Path<String>, data: web::Data<AppState>) -> 
 
     // 从内存删除
     let mut accounts = ACCOUNTS.write().await;
-    let removed = accounts.remove(&token).is_some();
+    let removed_account = accounts.remove(&token);
+    let email = removed_account.as_ref().map(|a| a.account_email.clone());
 
     // 从 DB 删除
     if let Ok(db) = data.db.lock() {
         let _ = db.delete_account(&token);
         // 同时删除该 email 的凭证
-        if let Some(email) = accounts // already removed, check if there's another entry
-            .values()
-            .find(|a| a.account_email.is_empty())
-            .map(|a| a.account_email.clone())
-        {
+        if let Some(email) = email {
             let _ = db.delete_credentials(&email);
         }
     }
 
-    if removed {
+    if removed_account.is_some() {
         HttpResponse::Ok().json(ApiResponse::success("已删除"))
     } else {
         HttpResponse::Ok().json(ApiResponse::success("已删除（仅数据库记录）"))
