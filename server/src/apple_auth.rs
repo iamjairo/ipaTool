@@ -134,9 +134,13 @@ impl Store {
         let mut url = format!("{}?guid={}", base_url, self.guid);
         let mut last_result: Option<HashMap<String, Value>> = None;
 
-        // Apple login flow: retry up to 4 attempts with 302 redirect handling
-        // (matches ipatool reference implementation)
-        for attempt in 1..=4u32 {
+        // auth.itunes.apple.com/auth/v1/native/fast behaves differently from
+        // buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate:
+        // - initial password-only login can start at attempt=1
+        // - MFA retry must start at attempt=2, otherwise Apple often returns HTTP 500
+        let start_attempt = if mfa.is_some() { 2 } else { 1 };
+
+        for attempt in start_attempt..=4u32 {
             let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(" ", ""));
 
             let mut auth_data = HashMap::new();
@@ -148,8 +152,8 @@ impl Store {
             auth_data.insert("why", "signIn".to_string());
 
             log::info!(
-                "Apple auth attempt {}: url={}, has_mfa={}",
-                attempt, url, mfa.is_some()
+                "Apple auth attempt {}: url={}, has_mfa={}, guid={}",
+                attempt, url, mfa.is_some(), self.guid
             );
 
             let response = self
