@@ -80,6 +80,31 @@
               </button>
               <button
                 class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                title="设置"
+                @click="showSettings = true"
+              >
+                <svg
+                  class="w-5 h-5 text-gray-600 dark:text-gray-300"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                  />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                  />
+                </svg>
+              </button>
+              <button
+                class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                 title="退出登录"
                 @click="handleLogout"
               >
@@ -115,6 +140,59 @@
           </div>
         </div>
       </header>
+
+      <!-- Settings dialog -->
+      <el-dialog
+        v-model="showSettings"
+        title="设置"
+        width="420px"
+        align-center
+      >
+        <div class="space-y-6">
+          <!-- Change credentials -->
+          <div>
+            <h4 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+              账号安全
+            </h4>
+            <el-form
+              label-position="top"
+            >
+              <el-form-item label="新用户名（留空则不修改）">
+                <el-input
+                  v-model="settingsForm.new_username"
+                  autocomplete="off"
+                  placeholder="输入新用户名"
+                />
+              </el-form-item>
+              <el-form-item label="当前密码">
+                <el-input
+                  v-model="settingsForm.current_password"
+                  type="password"
+                  show-password
+                  autocomplete="current-password"
+                  placeholder="输入当前密码以确认修改"
+                />
+              </el-form-item>
+              <el-form-item label="新密码（留空则不修改）">
+                <el-input
+                  v-model="settingsForm.new_password"
+                  type="password"
+                  show-password
+                  autocomplete="new-password"
+                  placeholder="输入新密码"
+                />
+              </el-form-item>
+              <el-button
+                type="primary"
+                :loading="settingsLoading"
+                @click="handleSaveSettings"
+              >
+                保存修改
+              </el-button>
+            </el-form>
+          </div>
+        </div>
+      </el-dialog>
 
       <main class="container mx-auto px-4 py-8">
         <TabLayout 
@@ -196,6 +274,55 @@ const appStore = useAppStore()
 const authState = ref('loading')
 
 const API_BASE = '/api'
+
+// Settings dialog
+const showSettings = ref(false)
+const settingsLoading = ref(false)
+const settingsForm = ref({
+  new_username: '',
+  current_password: '',
+  new_password: ''
+})
+
+async function handleSaveSettings() {
+  const { new_username, current_password, new_password } = settingsForm.value
+  if (!current_password) {
+    ElMessage.warning('请输入当前密码')
+    return
+  }
+  if (!new_username.trim() && !new_password) {
+    ElMessage.warning('请至少填写一项要修改的内容')
+    return
+  }
+
+  settingsLoading.value = true
+  try {
+    const res = await fetch(`${API_BASE}/auth/change-password`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        current_password,
+        new_password: new_password || current_password,
+        new_username: new_username.trim() || undefined
+      })
+    })
+    const json = await res.json()
+    if (!res.ok || !json.ok) {
+      throw new Error(json?.error || '修改失败')
+    }
+    ElMessage.success('修改成功，请重新登录')
+    showSettings.value = false
+    settingsForm.value = { new_username: '', current_password: '', new_password: '' }
+    // force re-login
+    authState.value = 'unauthenticated'
+    appStore.authState.user = null
+  } catch (e) {
+    ElMessage.error(e?.message || '修改失败')
+  } finally {
+    settingsLoading.value = false
+  }
+}
 
 async function checkAuth() {
   try {
