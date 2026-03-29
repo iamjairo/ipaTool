@@ -90,6 +90,7 @@ impl Store {
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .cookie_store(true)
             .build()
             .unwrap();
 
@@ -131,7 +132,7 @@ impl Store {
         guid: &str,
         attempt: u32,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let combined_password = format!("{}{}", password, mfa.unwrap_or(""));
+        let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(" ", ""));
 
         let mut params = HashMap::new();
         params.insert("appleId".to_string(), Value::String(email.to_string()));
