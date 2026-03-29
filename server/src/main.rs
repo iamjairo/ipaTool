@@ -1072,6 +1072,22 @@ async fn apple_login(
                     // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
                     let mut pending = PENDING_MFA.write().await;
                     pending.insert(req.email.clone(), account_store);
+
+                    return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                        "status": "need_mfa",
+                        "message": "此账号需要二次验证，请输入验证码后重新登录",
+                    })));
+                }
+
+                // MFA code provided but still got MFA-related error — code may be wrong/expired
+                if needs_mfa && req.mfa.is_some() {
+                    // Re-save AccountStore for retry
+                    let mut pending = PENDING_MFA.write().await;
+                    pending.insert(req.email.clone(), account_store);
+
+                    return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                        "验证码无效或已过期，请重新输入".to_string(),
+                    ));
                 }
 
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))

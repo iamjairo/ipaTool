@@ -344,19 +344,14 @@ const loginAccount = async () => {
 
 		const data = await response.json()
 
+		// MFA needed — backend returns ok=true with status=need_mfa
+		if (data.ok && data.data?.status === 'need_mfa') {
+			ElMessage.warning('此账号需要二次验证，请在验证码输入框输入 6 位数验证码后，再次点击登录')
+			logging.value = false
+			return
+		}
+
 		if (!data.ok) {
-			// 检查是否需要两步验证码（多种错误关键词匹配）
-			if (data.error && (
-				data.error.includes('verification code') || 
-				data.error.includes('two-factor') ||
-				data.error.includes('MFA') ||
-				data.error.includes('二次验证')
-			)) {
-				// 需要二次验证，提示用户在表单输入
-				ElMessage.warning('此账号需要二次验证，请在验证码输入框输入 6 位数验证码后，再次点击登录')
-				logging.value = false
-				return
-			}
 			ElMessage.error(`登录失败：${data.error || '未知错误'}`)
 			logging.value = false
 			return
@@ -415,9 +410,9 @@ const removeAccount = async (index) => {
 const refreshAccount = async (index) => {
 	const account = accounts.value[index]
 	if (!account) return
-	
+
 	refreshingIndex.value = index
-	
+
 	try {
 		const response = await fetch(`${API_BASE}/login/refresh`, {
 			method: 'POST',
@@ -426,9 +421,9 @@ const refreshAccount = async (index) => {
 			},
 			body: JSON.stringify({ token: account.token })
 		})
-		
+
 		const data = await response.json()
-		
+
 		if (data.ok) {
 			ElMessage.warning('账号会话已刷新')
 			// 刷新账号列表以获取最新信息

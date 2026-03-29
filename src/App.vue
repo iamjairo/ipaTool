@@ -141,22 +141,21 @@
         </div>
       </header>
 
-      <!-- Settings dialog -->
-      <el-dialog
+      <!-- Settings drawer -->
+      <el-drawer
         v-model="showSettings"
         title="设置"
-        width="420px"
-        align-center
+        direction="rtl"
+        size="400px"
+        :append-to-body="true"
       >
-        <div class="space-y-6">
-          <!-- Change credentials -->
-          <div>
-            <h4 class="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-              账号安全
+        <div class="px-2 space-y-8">
+          <!-- Account security section -->
+          <section>
+            <h4 class="text-sm font-semibold text-gray-900 dark:text-white mb-4 pb-2 border-b border-gray-200 dark:border-gray-700">
+              🔒 账号安全
             </h4>
-            <el-form
-              label-position="top"
-            >
+            <el-form label-position="top" class="space-y-0">
               <el-form-item label="新用户名（留空则不修改）">
                 <el-input
                   v-model="settingsForm.new_username"
@@ -190,9 +189,9 @@
                 保存修改
               </el-button>
             </el-form>
-          </div>
+          </section>
         </div>
-      </el-dialog>
+      </el-drawer>
 
       <main class="container mx-auto px-4 py-8">
         <TabLayout 
