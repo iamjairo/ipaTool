@@ -280,7 +280,7 @@ const loadAccounts = async () => {
 	if (saved) {
 		try {
 			accounts.value = JSON.parse(saved)
-		} catch (e) {
+		} catch {
 			accounts.value = []
 		}
 	}
@@ -378,7 +378,7 @@ const loginAccount = async () => {
 		// 重置表单
 		newAccount.value = { email: '', password: '', code: '' }
 
-		ElMessage.error(`登录成功：${data.email}`)
+		ElMessage.success(`登录成功：${data.email}`)
 	} catch (error) {
 		ElMessage.error(`登录失败：${error.message}`)
 	} finally {

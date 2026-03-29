@@ -1,9 +1,20 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
+import AutoImport from 'unplugin-auto-import/vite'
+import Components from 'unplugin-vue-components/vite'
+import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    AutoImport({
+      resolvers: [ElementPlusResolver()],
+    }),
+    Components({
+      resolvers: [ElementPlusResolver({ importStyle: 'css' })],
+    }),
+  ],
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src')
@@ -26,14 +37,12 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          'element-plus': ['element-plus', '@element-plus/icons-vue'],
           'vue-vendor': ['vue', 'pinia', '@vueuse/core'],
         }
       }
     }
   },
   define: {
-    // 生产环境使用相对路径访问 API
     __VUE_PROD_API_BASE__: JSON.stringify(process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8080')
   }
 })

@@ -9,7 +9,7 @@ pub struct InstallQuery {
 }
 
 /// 生成 plist 清单文件
-/// 
+///
 /// 用于 iOS OTA 安装，包含应用下载链接和元数据
 pub fn generate_plist(
     url: String,
@@ -23,7 +23,10 @@ pub fn generate_plist(
     // 软件属性
     let mut software_props = Dictionary::new();
     software_props.insert("SoftwarePackageURL".into(), Value::String(url.clone()));
-    software_props.insert("SoftwareVersion".into(), Value::String(bundle_version.clone()));
+    software_props.insert(
+        "SoftwareVersion".into(),
+        Value::String(bundle_version.clone()),
+    );
     software_props.insert("URL".into(), Value::String(url));
 
     // 元数据
@@ -35,7 +38,10 @@ pub fn generate_plist(
 
     software_props.insert("metadata".into(), Value::Dictionary(metadata));
 
-    dict.insert("software-attributes".into(), Value::Dictionary(software_props));
+    dict.insert(
+        "software-attributes".into(),
+        Value::Dictionary(software_props),
+    );
 
     // 生成 plist 字符串
     let plist_value = Value::Dictionary(dict);
@@ -56,7 +62,10 @@ pub fn generate_mobileconfig(
 ) -> Result<String, Box<dyn std::error::Error>> {
     // 构建 itms-services URL
     let encoded_manifest_url = urlencoding::encode(&manifest_url);
-    let itms_url = format!("itms-services://?action=download-manifest&url={}", encoded_manifest_url);
+    let itms_url = format!(
+        "itms-services://?action=download-manifest&url={}",
+        encoded_manifest_url
+    );
 
     // 创建 mobileconfig 的 Payload 数据结构
     let mut content_dict = Dictionary::new();
@@ -66,27 +75,52 @@ pub fn generate_mobileconfig(
     payload_dict.insert("Content".into(), Value::Dictionary(content_dict));
     payload_dict.insert("Description".into(), Value::String("Install app".into()));
     payload_dict.insert("DisplayName".into(), Value::String(display_name.clone()));
-    payload_dict.insert("Identifier".into(), Value::String(format!("com.ipatool.install.{}", uuid::Uuid::new_v4())));
-    payload_dict.insert("PayloadType".into(), Value::String("com.apple.developer.ota-install".into()));
-    payload_dict.insert("PayloadUUID".into(), Value::String(uuid::Uuid::new_v4().to_string()));
+    payload_dict.insert(
+        "Identifier".into(),
+        Value::String(format!("com.ipatool.install.{}", uuid::Uuid::new_v4())),
+    );
+    payload_dict.insert(
+        "PayloadType".into(),
+        Value::String("com.apple.developer.ota-install".into()),
+    );
+    payload_dict.insert(
+        "PayloadUUID".into(),
+        Value::String(uuid::Uuid::new_v4().to_string()),
+    );
     payload_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
     // 外层
     let mut mobileconfig_dict = Dictionary::new();
     mobileconfig_dict.insert("PayloadContent".into(), Value::Dictionary(payload_dict));
-    mobileconfig_dict.insert("PayloadDescription".into(), Value::String("Install app via OTA".into()));
+    mobileconfig_dict.insert(
+        "PayloadDescription".into(),
+        Value::String("Install app via OTA".into()),
+    );
     mobileconfig_dict.insert("PayloadDisplayName".into(), Value::String(display_name));
-    mobileconfig_dict.insert("PayloadIdentifier".into(), Value::String(format!("com.ipatool.config.{}", uuid::Uuid::new_v4())));
-    mobileconfig_dict.insert("PayloadOrganization".into(), Value::String("ipaTool".into()));
+    mobileconfig_dict.insert(
+        "PayloadIdentifier".into(),
+        Value::String(format!("com.ipatool.config.{}", uuid::Uuid::new_v4())),
+    );
+    mobileconfig_dict.insert(
+        "PayloadOrganization".into(),
+        Value::String("ipaTool".into()),
+    );
     mobileconfig_dict.insert("PayloadRemovalDisallowed".into(), Value::Boolean(false));
     mobileconfig_dict.insert("PayloadType".into(), Value::String("Configuration".into()));
-    mobileconfig_dict.insert("PayloadUUID".into(), Value::String(uuid::Uuid::new_v4().to_string()));
+    mobileconfig_dict.insert(
+        "PayloadUUID".into(),
+        Value::String(uuid::Uuid::new_v4().to_string()),
+    );
     mobileconfig_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
     // 生成 mobileconfig XML 字符串
     let mobileconfig_value = Value::Dictionary(mobileconfig_dict);
     let mut mobileconfig_bytes = Vec::new();
-    plist::to_writer_xml_with_options(&mut mobileconfig_bytes, &mobileconfig_value, &XmlWriteOptions::default())?;
+    plist::to_writer_xml_with_options(
+        &mut mobileconfig_bytes,
+        &mobileconfig_value,
+        &XmlWriteOptions::default(),
+    )?;
     let mobileconfig_string = String::from_utf8(mobileconfig_bytes)?;
 
     Ok(mobileconfig_string)

@@ -56,7 +56,7 @@ export const useAppStore = defineStore('app', () => {
       const json = await res.json()
       authState.value.user = json?.data || null
       return !!authState.value.user
-    } catch (e) {
+    } catch {
       authState.value.user = null
       return false
     } finally {
@@ -80,7 +80,7 @@ export const useAppStore = defineStore('app', () => {
       try {
         const json = await res.json()
         msg = json?.error || msg
-      } catch (_) {}
+      } catch {}
       throw new Error(msg)
     }
 
@@ -96,7 +96,7 @@ export const useAppStore = defineStore('app', () => {
         method: 'POST',
         credentials: 'include'
       })
-    } catch (_) {}
+    } catch {}
     authState.value.user = null
     authState.value.checked = true
   }

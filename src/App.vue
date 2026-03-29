@@ -211,7 +211,7 @@ async function checkAuth() {
   }
 }
 
-function onLoginSuccess(userData) {
+function onLoginSuccess() {
   authState.value = 'authenticated'
 }
 

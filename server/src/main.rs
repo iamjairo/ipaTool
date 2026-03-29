@@ -18,6 +18,7 @@ use ipa_webtool_services::{
     download_ipa_with_account, generate_mobileconfig, generate_plist, get_license_error_message,
     AccountStore, AdminUser, BatchItem, Database, DownloadManager, DownloadParams, InstallQuery,
     JobEndEvent, JobEvent, JobLogEvent, JobProgressEvent, JobProgressPayload, JobState, JobStore,
+    NewSubscription,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -166,6 +167,8 @@ struct AppState {
 // 模拟的账号存储（生产环境应该使用数据库）
 lazy_static::lazy_static! {
     static ref ACCOUNTS: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
+    // MFA 第一轮失败后暂存 AccountStore（保留 GUID），等待用户提交验证码后复用
+    static ref PENDING_MFA: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
 }
 
 fn hash_password(password: &str) -> String {
@@ -959,7 +962,16 @@ async fn apple_login(
     req: web::Json<AppleLoginRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let mut account_store = AccountStore::new(&req.email);
+    // 如果有 MFA code，优先复用第一轮暂存的 AccountStore（保留 GUID）
+    // 否则创建新的
+    let mut account_store = if req.mfa.is_some() {
+        let mut pending = PENDING_MFA.write().await;
+        pending
+            .remove(&req.email)
+            .unwrap_or_else(|| AccountStore::new(&req.email))
+    } else {
+        AccountStore::new(&req.email)
+    };
 
     match account_store
         .authenticate(&req.password, req.mfa.as_deref())
@@ -972,6 +984,12 @@ async fn apple_login(
                 .unwrap_or("failure");
 
             if state == "success" {
+                // 清理可能残留的 pending MFA 条目
+                {
+                    let mut pending = PENDING_MFA.write().await;
+                    pending.remove(&req.email);
+                }
+
                 // 生成 token
                 let token = uuid::Uuid::new_v4().to_string();
                 let dsid = result
@@ -1037,12 +1055,23 @@ async fn apple_login(
                     "displayName": result.get("displayName"),
                 })))
             } else {
-                // 返回失败响应
+                // 检查是否是 MFA 要求
                 let error_msg = result
                     .get("customerMessage")
                     .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("登录失败");
+
+                let needs_mfa = error_msg.to_lowercase().contains("verification code")
+                    || error_msg.to_lowercase().contains("two-factor")
+                    || error_msg.to_lowercase().contains("mfa")
+                    || error_msg.contains("二次验证");
+
+                if needs_mfa && req.mfa.is_none() {
+                    // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
+                    let mut pending = PENDING_MFA.write().await;
+                    pending.insert(req.email.clone(), account_store);
+                }
 
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
             }
@@ -1122,22 +1151,19 @@ async fn delete_account(token: web::Path<String>, data: web::Data<AppState>) -> 
 
     // 从内存删除
     let mut accounts = ACCOUNTS.write().await;
-    let removed = accounts.remove(&token).is_some();
+    let removed_account = accounts.remove(&token);
+    let email = removed_account.as_ref().map(|a| a.account_email.clone());
 
     // 从 DB 删除
     if let Ok(db) = data.db.lock() {
         let _ = db.delete_account(&token);
         // 同时删除该 email 的凭证
-        if let Some(email) = accounts // already removed, check if there's another entry
-            .values()
-            .find(|a| a.account_email.is_empty())
-            .map(|a| a.account_email.clone())
-        {
+        if let Some(email) = email {
             let _ = db.delete_credentials(&email);
         }
     }
 
-    if removed {
+    if removed_account.is_some() {
         HttpResponse::Ok().json(ApiResponse::success("已删除"))
     } else {
         HttpResponse::Ok().json(ApiResponse::success("已删除（仅数据库记录）"))
@@ -1169,35 +1195,34 @@ async fn get_credentials_list(data: web::Data<AppState>) -> impl Responder {
 
 // 自动登录所有保存的凭证
 async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
-    let db = match data.db.lock() {
-        Ok(db) => db,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("数据库不可用".to_string()))
-        }
-    };
+    let (credentials, enc_key) = {
+        let db = match data.db.lock() {
+            Ok(db) => db,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+            }
+        };
 
-    let credentials = match db.get_all_credentials() {
-        Ok(c) => c,
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
-        }
-    };
+        let credentials = match db.get_all_credentials() {
+            Ok(c) => c,
+            Err(e) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
+            }
+        };
 
-    // 确保 encryption key 可用
-    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
-        Ok(k) => k,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "加密密钥初始化失败: {}",
-                e
-            )))
-        }
-    };
+        let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+            Ok(k) => k,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("加密密钥初始化失败: {}", e),
+                ))
+            }
+        };
 
-    // 释放 DB 锁，后续操作需要异步
-    drop(db);
+        (credentials, enc_key)
+    };
 
     let mut success = Vec::new();
     let mut need_code = Vec::new();
@@ -1331,45 +1356,45 @@ async fn refresh_login(
     };
     drop(accounts);
 
-    // 尝试从 DB 获取保存的凭证
-    let db = match data.db.lock() {
-        Ok(db) => db,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("数据库不可用".to_string()))
-        }
-    };
+    let password = {
+        let db = match data.db.lock() {
+            Ok(db) => db,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+            }
+        };
 
-    let cred = match db.get_credentials(&email) {
-        Ok(Some(c)) => c,
-        _ => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "未找到保存的密码，无法自动刷新。请重新登录。".to_string(),
-            ))
-        }
-    };
+        let cred = match db.get_credentials(&email) {
+            Ok(Some(c)) => c,
+            _ => {
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                    "未找到保存的密码，无法自动刷新。请重新登录。".to_string(),
+                ))
+            }
+        };
 
-    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
-        Ok(k) => k,
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
-        }
-    };
+        let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+            Ok(k) => k,
+            Err(e) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
+            }
+        };
 
-    let password = match ipa_webtool_services::crypto::decrypt(
-        &cred.password_encrypted,
-        &cred.iv,
-        &cred.auth_tag,
-        &enc_key,
-    ) {
-        Ok(p) => p,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+        match ipa_webtool_services::crypto::decrypt(
+            &cred.password_encrypted,
+            &cred.iv,
+            &cred.auth_tag,
+            &enc_key,
+        ) {
+            Ok(password) => password,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+            }
         }
     };
-    drop(db);
 
     // 重新认证
     let mut store = AccountStore::new(&email);
@@ -1873,15 +1898,17 @@ async fn add_subscription(
     req: web::Json<SubscriptionRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    match data.db.lock().unwrap().add_subscription(
-        &req.app_id,
-        &req.app_name,
-        req.bundle_id.as_deref(),
-        &req.account_email,
-        req.account_region.as_deref(),
-        req.artwork_url.as_deref(),
-        req.artist_name.as_deref(),
-    ) {
+    let subscription = NewSubscription {
+        app_id: &req.app_id,
+        app_name: &req.app_name,
+        bundle_id: req.bundle_id.as_deref(),
+        account_email: &req.account_email,
+        account_region: req.account_region.as_deref(),
+        artwork_url: req.artwork_url.as_deref(),
+        artist_name: req.artist_name.as_deref(),
+    };
+
+    match data.db.lock().unwrap().add_subscription(&subscription) {
         Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已添加".to_string())),
         Err(e) => HttpResponse::InternalServerError()
             .json(ApiResponse::<String>::error(format!("添加订阅失败: {}", e))),

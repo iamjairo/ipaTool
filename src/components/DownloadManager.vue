@@ -777,7 +777,7 @@ const loadAccounts = async () => {
   if (saved) {
     try {
       accounts.value = JSON.parse(saved)
-    } catch (e) {
+    } catch {
       accounts.value = []
     }
   }
@@ -1207,7 +1207,7 @@ const connectToSSE = (jobId, queueItem) => {
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, { logs: logs.value })
       }
-    } catch (_) {}
+    } catch {}
   })
 
   es.addEventListener('end', (ev) => {
@@ -1237,7 +1237,7 @@ const connectToSSE = (jobId, queueItem) => {
       } else {
         addLog(`[结束] 任务结束：${data.status || 'unknown'}`)
       }
-    } catch (_) {}
+    } catch {}
     es.close()
   })
 
