@@ -2126,7 +2126,7 @@ async fn main() -> std::io::Result<()> {
                     ),
             )
             // 托管前端静态文件
-            .service(fs::Files::new("/", "../dist").index_file("index.html"))
+            .service(fs::Files::new("/", "./dist").index_file("index.html"))
     })
     .bind(bind_address)?
     .run()
