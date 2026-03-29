@@ -1159,13 +1159,12 @@ async fn apple_login(
                     })));
                 }
 
-                // Generic auth failure — still save session for potential MFA retry
-                // Apple sometimes returns BadLogin even when MFA is needed,
-                // so always preserve the AccountStore (GUID) for a second attempt
-                if !has_mfa {
+                // Non-MFA auth failure: do not blindly keep a pending MFA session.
+                // Preserve pending state only for explicit MFA branches above, otherwise
+                // wrong-password / locked-account flows can poison the next login attempt.
+                {
                     let mut pending = PENDING_MFA.write().await;
-                    pending.insert(req.email.clone(), account_store);
-                    log::info!("Saved session for {} after generic failure (GUID preserved for MFA retry)", req.email);
+                    pending.remove(&req.email);
                 }
 
                 log::error!("Apple auth failed for {}: {}", req.email, user_facing_msg);

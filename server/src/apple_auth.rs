@@ -94,6 +94,18 @@ fn plist_value_to_json(val: &plist::Value) -> Value {
     }
 }
 
+fn build_xml_plist_body(fields: &[(&str, String)]) -> Result<Vec<u8>, String> {
+    let mut dict = plist::Dictionary::new();
+    for (k, v) in fields {
+        dict.insert((*k).to_string(), plist::Value::String(v.clone()));
+    }
+
+    let mut buf = Vec::new();
+    plist::to_writer_xml(&mut buf, &plist::Value::Dictionary(dict))
+        .map_err(|e| format!("failed to encode plist body: {}", e))?;
+    Ok(buf)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthInfo {
     pub ds_person_id: Option<String>,
@@ -256,16 +268,18 @@ impl Store {
         for attempt in 1..=4u32 {
             let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(' ', ""));
 
-            let mut auth_data = HashMap::new();
-            auth_data.insert("appleId", email.to_string());
-            auth_data.insert("attempt", attempt.to_string());
-            auth_data.insert("guid", self.guid.clone());
-            auth_data.insert("password", combined_password);
-            auth_data.insert("rmp", "0".to_string());
-            auth_data.insert("why", "signIn".to_string());
+            let auth_body = build_xml_plist_body(&[
+                ("appleId", email.to_string()),
+                ("attempt", attempt.to_string()),
+                ("guid", self.guid.clone()),
+                ("password", combined_password),
+                ("rmp", "0".to_string()),
+                ("why", "signIn".to_string()),
+            ])
+            .map_err(|e| format!("build auth plist failed: {}", e))?;
 
             log::info!(
-                "Apple auth attempt {}: url={}, has_mfa={}, guid={}",
+                "Apple auth attempt {}: url={}, has_mfa={}, guid={}, body=plist+xml/form-urlencoded",
                 attempt,
                 url,
                 mfa.is_some(),
@@ -276,7 +290,7 @@ impl Store {
                 .client
                 .post(&url)
                 .headers(Self::form_headers())
-                .form(&auth_data)
+                .body(auth_body)
                 .send()
                 .await?;
 
