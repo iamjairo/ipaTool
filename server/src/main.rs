@@ -122,6 +122,7 @@ struct AdminLoginRequest {
 struct ChangePasswordRequest {
     current_password: String,
     new_password: String,
+    new_username: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1559,8 +1560,23 @@ async fn change_password(
             .json(ApiResponse::<String>::error(format!("修改密码失败: {}", e)));
     }
 
+    let final_username = if let Some(new_name) = &req.new_username {
+        let trimmed = new_name.trim();
+        if !trimmed.is_empty() && trimmed != admin.username {
+            if let Err(e) = db.rename_admin_user(&admin.username, trimmed) {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("修改用户名失败: {}", e)));
+            }
+            trimmed.to_string()
+        } else {
+            admin.username.clone()
+        }
+    } else {
+        admin.username.clone()
+    };
+
     HttpResponse::Ok().json(ApiResponse::success(AuthUserPayload {
-        username: admin.username,
+        username: final_username,
         is_default: false,
     }))
 }

@@ -71,7 +71,7 @@
 
       <el-dialog
         v-model="showChangePassword"
-        title="首次登录：请修改密码"
+        title="首次登录：请修改用户名和密码"
         width="420px"
         :close-on-click-modal="false"
         :close-on-press-escape="false"
@@ -84,6 +84,17 @@
           :rules="pwdRules"
           label-position="top"
         >
+          <el-form-item
+            label="新用户名"
+            prop="new_username"
+          >
+            <el-input
+              v-model="pwdForm.new_username"
+              autocomplete="off"
+              placeholder="请输入新用户名"
+              @keyup.enter="handleChangePassword"
+            />
+          </el-form-item>
           <el-form-item
             label="当前密码"
             prop="current_password"
@@ -146,6 +157,7 @@ import { reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '@/stores/app'
 
+const emit = defineEmits(['login-success'])
 const appStore = useAppStore()
 
 const loginFormRef = ref(null)
@@ -166,6 +178,7 @@ const pwdFormRef = ref(null)
 const pwdLoading = ref(false)
 
 const pwdForm = reactive({
+  new_username: '',
   current_password: '',
   new_password: '',
   confirm_password: ''
@@ -208,11 +221,13 @@ const handleLogin = async () => {
     loginLoading.value = true
     const user = await appStore.loginAdmin(loginForm.username, loginForm.password)
 
-    ElMessage.success('登录成功')
-
     if (user?.is_default) {
       showChangePassword.value = true
       pwdForm.current_password = loginForm.password
+      pwdForm.new_username = ''
+    } else {
+      ElMessage.success('登录成功')
+      emit('login-success')
     }
   } catch (e) {
     ElMessage.error(e?.message || '登录失败')
@@ -237,7 +252,8 @@ const handleChangePassword = async () => {
       credentials: 'include',
       body: JSON.stringify({
         current_password: pwdForm.current_password,
-        new_password: pwdForm.new_password
+        new_password: pwdForm.new_password,
+        new_username: pwdForm.new_username.trim() || undefined
       })
     })
 
@@ -253,9 +269,11 @@ const handleChangePassword = async () => {
     const json = await res.json()
     appStore.setAuthUser(json?.data || null)
 
-    ElMessage.success('密码修改成功')
+    ElMessage.success('密码修改成功，请使用新密码重新登录')
     showChangePassword.value = false
+    appStore.authState.user = null
 
+    pwdForm.new_username = ''
     pwdForm.current_password = ''
     pwdForm.new_password = ''
     pwdForm.confirm_password = ''

@@ -459,6 +459,19 @@ impl Database {
         Ok(())
     }
 
+    pub fn rename_admin_user(&self, old_username: &str, new_username: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE sessions SET username = ? WHERE username = ?",
+            params![new_username, old_username],
+        )?;
+        conn.execute(
+            "UPDATE admin_users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?",
+            params![new_username, old_username],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_admin_user(&self, username: &str) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         conn.execute(
