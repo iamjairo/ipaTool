@@ -1,6 +1,7 @@
 <template>
-  <div class="card">
-    <div class="flex items-center justify-between mb-6">
+  <div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-4">
       <div class="flex items-center space-x-3">
         <div class="w-12 h-12 bg-gradient-to-br from-orange-500 to-red-500 rounded-xl flex items-center justify-center shadow-lg">
           <svg
@@ -9,12 +10,7 @@
             stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 6h16M4 10h16M4 14h16M4 18h16"
-            />
+            <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" /><line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" /><line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
           </svg>
         </div>
         <div>
@@ -22,31 +18,29 @@
             下载队列
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            {{ queue.length }} 个任务 | {{ records.length }} 条记录
+            {{ queue.length }} 个任务 · {{ records.length }} 条记录
           </p>
         </div>
       </div>
-      <div class="flex items-center space-x-2">
-        <button
-          class="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
-          title="刷新记录"
-          @click="loadRecords"
+      <button
+        class="p-2.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-xl transition-colors"
+        title="刷新记录"
+        @click="loadRecords"
+      >
+        <svg
+          class="w-5 h-5"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
         >
-          <svg
-            class="w-5 h-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-        </button>
-      </div>
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+      </button>
     </div>
 
     <!-- 任务队列 -->
@@ -416,18 +410,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.card {
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.dark .card {
-  background: #1f2937;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
 .record-card {
   transition: all 0.2s ease;
 }
@@ -439,10 +421,6 @@ onMounted(() => {
 
 /* 移动端响应式 */
 @media (max-width: 767px) {
-  .card {
-    padding: 12px;
-  }
-  
   .record-card :deep(.el-card__body) {
     padding: 12px;
   }
