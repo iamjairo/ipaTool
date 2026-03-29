@@ -1096,17 +1096,21 @@ async fn apple_login(
                         }
                     });
 
-                // Enhanced MFA detection — check both failureType and customerMessage
-                let needs_mfa = error_msg.to_lowercase().contains("verification code")
+                // MFA detection matching ipatool reference:
+                // failureType == "" && no authCode provided && CustomerMessage == BadLogin
+                // means Apple wants a 2FA code appended to password
+                let bad_login_without_mfa = failure_type.is_empty()
+                    && !has_mfa
+                    && (error_msg == "MZFinance.BadLogin.Configurator_message"
+                        || error_msg.contains("BadLogin"));
+
+                let needs_mfa = bad_login_without_mfa
+                    || error_msg.to_lowercase().contains("verification code")
                     || error_msg.to_lowercase().contains("two-factor")
                     || error_msg.to_lowercase().contains("mfa")
                     || error_msg.to_lowercase().contains("2fa")
                     || error_msg.to_lowercase().contains("two-step")
-                    || error_msg.to_lowercase().contains("trusted device")
-                    || error_msg.contains("二次验证")
-                    || error_msg.contains("验证码")
-                    || failure_type.contains("MFA")
-                    || failure_type.contains("-219")  // Apple MFA error code
+                    || failure_type.contains("-219")
                     || failure_type.contains("verificationCode");
 
                 // Translate Apple's cryptic customerMessage keys to readable text

@@ -1,4 +1,4 @@
-use reqwest::{header, Client};
+use reqwest::{header, Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -111,9 +111,8 @@ impl Store {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             "User-Agent",
-            // 更新为符合 Apple 最新要求的 User-Agent (2025/2026)
-            // 使用 Configurator 2.3.0 + macOS 13.x + Safari 605
-            "Configurator/2.3.0 (Macintosh; OS X 13.5.0; 22G74) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+            // Match ipatool reference: Configurator/2.17 + macOS 15.2
+            "Configurator/2.17 (Macintosh; OS X 15.2; 24C5089c) AppleWebKit/0620.1.16.11.6"
                 .parse()
                 .unwrap(),
         );
@@ -124,98 +123,135 @@ impl Store {
         headers
     }
 
+    /// Encode login parameters as XML plist body (as Apple expects)
+    fn encode_plist_body(
+        email: &str,
+        password: &str,
+        mfa: Option<&str>,
+        guid: &str,
+        attempt: u32,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+        let combined_password = format!("{}{}", password, mfa.unwrap_or(""));
+
+        let mut params = HashMap::new();
+        params.insert("appleId".to_string(), Value::String(email.to_string()));
+        params.insert("attempt".to_string(), Value::Number(serde_json::Number::from(attempt)));
+        params.insert("guid".to_string(), Value::String(guid.to_string()));
+        params.insert("password".to_string(), Value::String(combined_password));
+        params.insert("rmp".to_string(), Value::String("0".to_string()));
+        params.insert("why".to_string(), Value::String("signIn".to_string()));
+
+        // Convert serde_json::Value map to plist-friendly structure
+        let plist_dict: HashMap<String, plist::Value> = params.into_iter().map(|(k, v)| {
+            let pv = match v {
+                Value::String(s) => plist::Value::String(s),
+                Value::Number(n) => plist::Value::Integer(plist::Integer::from(n.as_u64().unwrap_or(0) as i64)),
+                _ => plist::Value::String(v.to_string()),
+            };
+            (k, pv)
+        }).collect();
+
+        let mut buf = Vec::new();
+        plist::to_writer_xml(&mut buf, &plist_dict)?;
+        Ok(buf)
+    }
+
     pub async fn authenticate(
         &self,
         email: &str,
         password: &str,
         mfa: Option<&str>,
     ) -> Result<HashMap<String, Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!(
-            "https://auth.itunes.apple.com/auth/v1/native/fast?guid={}",
-            self.guid
-        );
+        let base_url = "https://auth.itunes.apple.com/auth/v1/native/fast";
+        let mut url = format!("{}?guid={}", base_url, self.guid);
+        let mut last_result: Option<HashMap<String, Value>> = None;
 
-        let mut auth_data = HashMap::new();
-        auth_data.insert("appleId", Value::String(email.to_string()));
-        auth_data.insert(
-            "attempt",
-            Value::Number(serde_json::Number::from(if mfa.is_some() { 2 } else { 4 })),
-        );
-        auth_data.insert("createSession", Value::String("true".to_string()));
-        auth_data.insert("guid", Value::String(self.guid.clone()));
-        auth_data.insert(
-            "password",
-            Value::String(format!("{}{}", password, mfa.unwrap_or(""))),
-        );
-        auth_data.insert("rmp", Value::Number(serde_json::Number::from(0)));
-        auth_data.insert("why", Value::String("signIn".to_string()));
+        // Apple login flow: retry up to 4 attempts with 302 redirect handling
+        // (matches ipatool reference implementation)
+        for attempt in 1..=4u32 {
+            let body = Self::encode_plist_body(email, password, mfa, &self.guid, attempt)?;
 
-        let response = self
-            .client
-            .post(&url)
-            .headers(Self::get_headers())
-            .form(&auth_data)
-            .send()
-            .await?;
+            log::info!(
+                "Apple auth attempt {}: url={}, body_len={}",
+                attempt, url, body.len()
+            );
 
-        let status = response.status();
-        let body_text = response.text().await.unwrap_or_default();
+            let response = self
+                .client
+                .post(&url)
+                .headers(Self::get_headers())
+                .body(body)
+                .send()
+                .await?;
 
-        log::info!(
-            "Apple auth response: status={}, content_type_guess={}, body_len={}",
-            status,
-            if body_text.trim().starts_with("<?xml") { "plist" }
-            else if body_text.trim().starts_with('{') { "json" }
-            else { "unknown" },
-            body_text.len()
-        );
-        log::debug!("Apple auth full body: {}", &body_text[..body_text.len().min(2000)]);
+            let status = response.status();
 
-        // Parse response — Apple returns XML plist
-        let result = match parse_apple_plist_response(&body_text) {
-            Ok(m) => m,
-            Err(e) => {
-                log::error!("Failed to parse Apple response ({} bytes): {}", body_text.len(), e);
-                let mut m = HashMap::new();
-                m.insert("_state".to_string(), Value::String("failure".to_string()));
-                m.insert("failureType".to_string(), Value::String("ParseError".to_string()));
-                m.insert("customerMessage".to_string(), Value::String(
-                    "无法解析 Apple 的响应，请稍后重试".to_string()
-                ));
-                return Ok(m);
+            // Handle 302 redirect — follow to new URL
+            if status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY {
+                if let Some(location) = response.headers().get("location") {
+                    if let Ok(loc_str) = location.to_str() {
+                        url = loc_str.to_string();
+                        log::info!("Apple auth redirect -> {}", url);
+                        continue;
+                    }
+                }
             }
-        };
 
+            let body_text = response.text().await.unwrap_or_default();
+
+            log::info!(
+                "Apple auth response: status={}, body_len={}",
+                status,
+                body_text.len()
+            );
+
+            // Parse plist response
+            let result = match parse_apple_plist_response(&body_text) {
+                Ok(m) => m,
+                Err(e) => {
+                    log::error!(
+                        "Failed to parse Apple response ({} bytes, attempt {}): {}",
+                        body_text.len(), attempt, e
+                    );
+                    let mut m = HashMap::new();
+                    m.insert("_state".to_string(), Value::String("failure".to_string()));
+                    m.insert("failureType".to_string(), Value::String("ParseError".to_string()));
+                    m.insert("customerMessage".to_string(), Value::String(
+                        "无法解析 Apple 的响应，请稍后重试".to_string()
+                    ));
+                    return Ok(m);
+                }
+            };
+
+            let failure_type = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
+            let _customer_msg = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
+
+            // Check for -5000 (InvalidCredentials) on attempt 1 → auto retry
+            if attempt == 1 && failure_type == "-5000" {
+                log::info!("Apple auth: InvalidCredentials on attempt 1, auto-retrying");
+                last_result = Some(result);
+                continue;
+            }
+
+            last_result = Some(result);
+            break;
+        }
+
+        let result = last_result.unwrap_or_default();
         let mut final_result = result.clone();
 
-        // Check for explicit success indicators
-        let has_success_fields = result.contains_key("dsPersonId")
-            || result.contains_key("passwordToken")
-            || result.contains_key("adsid");
+        // Check for success
+        let has_success = result.contains_key("dsPersonId")
+            || result.contains_key("passwordToken");
 
-        if has_success_fields {
-            // Success — clear any failure markers
+        if has_success {
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
             log::info!("Apple auth SUCCESS for {}", email);
-        } else if result.contains_key("failureType") {
-            let ft = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
-            let cm = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
-
-            if ft.is_empty() && !cm.is_empty() {
-                // Empty failureType but has customerMessage — Apple rejected login
-                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-                log::warn!("Apple auth rejected: customerMessage='{}'", cm);
-            } else if !ft.is_empty() {
-                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-                log::warn!("Apple auth failure: type='{}', message='{}'", ft, cm);
-            } else {
-                // Both empty — ambiguous
-                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-                log::warn!("Apple auth ambiguous failure (empty failureType & customerMessage)");
-            }
         } else {
             final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-            log::warn!("Apple auth unexpected response keys: {:?}", result.keys().take(10).collect::<Vec<_>>());
+            let ft = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
+            let cm = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
+            log::warn!("Apple auth failure: type='{}', msg='{}'", ft, cm);
         }
 
         Ok(final_result)
