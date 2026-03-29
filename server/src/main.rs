@@ -963,13 +963,28 @@ async fn apple_login(
     req: web::Json<AppleLoginRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
+    let has_mfa = req.mfa.is_some();
+    log::info!(
+        "Apple login attempt: email={}, has_mfa={}, mfa_len={}",
+        req.email,
+        has_mfa,
+        req.mfa.as_ref().map(|s| s.len()).unwrap_or(0)
+    );
+
     // 如果有 MFA code，优先复用第一轮暂存的 AccountStore（保留 GUID）
     // 否则创建新的
-    let mut account_store = if req.mfa.is_some() {
+    let mut account_store = if has_mfa {
         let mut pending = PENDING_MFA.write().await;
-        pending
-            .remove(&req.email)
-            .unwrap_or_else(|| AccountStore::new(&req.email))
+        match pending.remove(&req.email) {
+            Some(store) => {
+                log::info!("Reusing pending MFA session for {}", req.email);
+                store
+            }
+            None => {
+                log::warn!("No pending MFA session found for {}, creating fresh (GUID mismatch risk)", req.email);
+                AccountStore::new(&req.email)
+            }
+        }
     } else {
         AccountStore::new(&req.email)
     };
@@ -983,6 +998,12 @@ async fn apple_login(
                 .get("_state")
                 .and_then(|v| v.as_str())
                 .unwrap_or("failure");
+
+            log::info!(
+                "Apple auth result: state={}, keys={:?}",
+                state,
+                result.keys().take(10).collect::<Vec<_>>()
+            );
 
             if state == "success" {
                 // 清理可能残留的 pending MFA 条目
@@ -1048,7 +1069,8 @@ async fn apple_login(
                     }
                 }
 
-                // 返回成功响应
+                log::info!("Apple login success: email={}, dsid={}", req.email, dsid);
+
                 HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                     "token": token,
                     "email": req.email,
@@ -1057,55 +1079,95 @@ async fn apple_login(
                 })))
             } else {
                 // 检查是否是 MFA 要求
+                let failure_type = result
+                    .get("failureType")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
                 let error_msg = result
                     .get("customerMessage")
-                    .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("登录失败");
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| {
+                        if failure_type.is_empty() {
+                            "登录失败，Apple 未返回具体错误信息"
+                        } else {
+                            failure_type
+                        }
+                    });
 
+                // Enhanced MFA detection — check both failureType and customerMessage
                 let needs_mfa = error_msg.to_lowercase().contains("verification code")
                     || error_msg.to_lowercase().contains("two-factor")
                     || error_msg.to_lowercase().contains("mfa")
-                    || error_msg.contains("二次验证");
+                    || error_msg.to_lowercase().contains("2fa")
+                    || error_msg.to_lowercase().contains("two-step")
+                    || error_msg.to_lowercase().contains("trusted device")
+                    || error_msg.contains("二次验证")
+                    || error_msg.contains("验证码")
+                    || failure_type.contains("MFA")
+                    || failure_type.contains("-219")  // Apple MFA error code
+                    || failure_type.contains("verificationCode");
 
-                if needs_mfa && req.mfa.is_none() {
+                log::warn!(
+                    "Apple auth failure: failureType='{}', msg='{}', needs_mfa={}, has_mfa={}",
+                    failure_type, error_msg, needs_mfa, has_mfa
+                );
+
+                if needs_mfa && !has_mfa {
                     // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
-                    let mut pending = PENDING_MFA.write().await;
-                    pending.insert(req.email.clone(), account_store);
+                    {
+                        let mut pending = PENDING_MFA.write().await;
+                        pending.insert(req.email.clone(), account_store);
+                    }
+
+                    log::info!("Saved pending MFA session for {}", req.email);
 
                     return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                         "status": "need_mfa",
-                        "message": "此账号需要二次验证，请输入验证码后重新登录",
+                        "message": "此账号需要二次验证，请在验证码输入框输入 6 位验证码后再次点击登录",
                     })));
                 }
 
                 // MFA code provided but still got MFA-related error — code may be wrong/expired
-                if needs_mfa && req.mfa.is_some() {
+                if needs_mfa && has_mfa {
                     // Re-save AccountStore for retry
-                    let mut pending = PENDING_MFA.write().await;
-                    pending.insert(req.email.clone(), account_store);
+                    {
+                        let mut pending = PENDING_MFA.write().await;
+                        pending.insert(req.email.clone(), account_store);
+                    }
 
-                    return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                        "验证码无效或已过期，请重新输入".to_string(),
-                    ));
+                    log::warn!("MFA code rejected for {}", req.email);
+
+                    return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                        "status": "mfa_failed",
+                        "message": "验证码无效或已过期，请检查后重新输入",
+                    })));
                 }
 
-                HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
+                // Generic auth failure
+                log::error!("Apple auth failed for {}: {}", req.email, error_msg);
+                HttpResponse::Ok().json(ApiResponse::<String>::error(error_msg.to_string()))
             }
         }
         Err(e) => {
             let err_msg = e.to_string();
-            // 如果是 JSON 解析错误，说明 Apple 返回了非 JSON 响应，给用户更友好的提示
+            log::error!("Apple auth exception for {}: {}", req.email, err_msg);
+
+            // 如果是 JSON 解析错误，说明 Apple 返回了非 JSON 响应
             if err_msg.contains("error decoding response body")
                 || err_msg.contains("expected value")
             {
-                HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试开启二步验证后用应用专用密码登录。".to_string()
+                HttpResponse::Ok().json(ApiResponse::<String>::error(
+                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试使用应用专用密码登录".to_string()
+                ))
+            } else if err_msg.contains("timed out") || err_msg.contains("deadline") {
+                HttpResponse::Ok().json(ApiResponse::<String>::error(
+                    "连接 Apple 超时，请检查网络环境".to_string()
                 ))
             } else {
-                HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                    "登录失败: {}",
-                    err_msg
+                HttpResponse::Ok().json(ApiResponse::<String>::error(format!(
+                    "登录失败: {}", err_msg
                 )))
             }
         }

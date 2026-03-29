@@ -148,6 +148,7 @@
               size="large"
               clearable
               class="form-input"
+              :class="{ 'mfa-highlight': mfaRequired }"
             >
               <template #prefix>
                 <el-icon class="field-icon">
@@ -155,6 +156,12 @@
                 </el-icon>
               </template>
             </el-input>
+            <p
+              v-if="mfaRequired"
+              class="mfa-hint"
+            >
+              ⚠️ 请输入受信任设备上收到的 6 位验证码
+            </p>
           </div>
 
           <!-- 保存密码选项 -->
@@ -252,6 +259,7 @@ const logging = ref(false)
 const autoLogging = ref(false)
 const savePassword = ref(true) // 默认保存密码
 const refreshingIndex = ref(null) // 正在刷新的账号索引
+const mfaRequired = ref(false) // 是否处于 MFA 等待状态
 
 // 表单验证
 const isFormValid = computed(() => {
@@ -327,7 +335,6 @@ const loginAccount = async () => {
 
 	logging.value = true
 
-	// 尝试登录，不带MFA代码
 	try {
 		const response = await fetch(`${API_BASE}/login`, {
 			method: 'POST',
@@ -344,25 +351,47 @@ const loginAccount = async () => {
 
 		const data = await response.json()
 
-		// MFA needed — backend returns ok=true with status=need_mfa
-		if (data.ok && data.data?.status === 'need_mfa') {
-			ElMessage.warning('此账号需要二次验证，请在验证码输入框输入 6 位数验证码后，再次点击登录')
+		// Network/server error
+		if (!response.ok && !data.ok) {
+			ElMessage.error(`登录失败：${data.error || '服务器错误'}`)
 			logging.value = false
 			return
 		}
 
+		// MFA needed — first round, no code provided yet
+		if (data.ok && data.data?.status === 'need_mfa') {
+			mfaRequired.value = true
+			ElMessage({
+				type: 'warning',
+				message: '此账号需要二次验证，请查看你的受信任设备上的验证码，填入后再次点击登录',
+				duration: 8000,
+			})
+			logging.value = false
+			return
+		}
+
+		// MFA code was wrong/expired — keep the session, let user retry
+		if (data.ok && data.data?.status === 'mfa_failed') {
+			ElMessage.error('验证码无效或已过期，请重新输入')
+			newAccount.value.code = ''
+			logging.value = false
+			return
+		}
+
+		// Business logic error (bad password, account locked, etc.)
 		if (!data.ok) {
 			ElMessage.error(`登录失败：${data.error || '未知错误'}`)
 			logging.value = false
 			return
 		}
 
-		// 登录成功，保存账号信息
+		// Login success
+		mfaRequired.value = false
 		accounts.value.push({
-			token: data.token,
-			email: data.email,
-			dsid: data.dsid,
-			region: data.region || 'US',
+			token: data.data.token,
+			email: data.data.email,
+			dsid: data.data.dsid,
+			region: data.data.region || 'US',
 		})
 
 		// 更新保存的凭证列表
@@ -373,9 +402,9 @@ const loginAccount = async () => {
 		// 重置表单
 		newAccount.value = { email: '', password: '', code: '' }
 
-		ElMessage.success(`登录成功：${data.email}`)
+		ElMessage.success(`登录成功：${data.data.email}`)
 	} catch (error) {
-		ElMessage.error(`登录失败：${error.message}`)
+		ElMessage.error(`网络错误：${error.message}`)
 	} finally {
 		logging.value = false
 	}
@@ -1066,6 +1095,23 @@ defineExpose({
 
 .dark .checkbox-label {
 	color: #9ca3af;
+}
+
+/* MFA 高亮提示 */
+.mfa-highlight :deep(.el-input__wrapper) {
+	box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.3) !important;
+	border-color: #f59e0b !important;
+}
+
+.mfa-hint {
+	font-size: 12px;
+	color: #f59e0b;
+	margin: 4px 0 0 0;
+	font-weight: 500;
+}
+
+.dark .mfa-hint {
+	color: #fbbf24;
 }
 
 /* 响应式设计 */

@@ -82,7 +82,6 @@ impl Store {
         auth_data.insert("rmp", Value::Number(serde_json::Number::from(0)));
         auth_data.insert("why", Value::String("signIn".to_string()));
 
-        // 将数据转换为 plist 格式（这里简化处理）
         let response = self
             .client
             .post(&url)
@@ -91,13 +90,68 @@ impl Store {
             .send()
             .await?;
 
-        let result: HashMap<String, Value> = response.json().await?;
+        let status = response.status();
+        let body_text = response.text().await.unwrap_or_default();
+
+        log::info!(
+            "Apple auth response: status={}, body_len={}",
+            status,
+            body_text.len()
+        );
+
+        // Try to parse JSON; if it fails, build a structured error
+        let result: HashMap<String, Value> = if body_text.trim().starts_with('{') || body_text.trim().starts_with('<') {
+            // Attempt JSON parse; if Apple returned non-JSON, synthesize a failure
+            match serde_json::from_str(&body_text) {
+                Ok(v) => v,
+                Err(e) => {
+                    log::warn!("Apple returned non-JSON response ({} bytes): parse error {}", body_text.len(), e);
+                    let mut m = HashMap::new();
+                    m.insert("_state".to_string(), Value::String("failure".to_string()));
+                    m.insert("failureType".to_string(), Value::String("NonJSONResponse".to_string()));
+                    m.insert("customerMessage".to_string(), Value::String(
+                        "Apple 返回了非预期响应，请检查网络环境或稍后重试".to_string()
+                    ));
+                    return Ok(m);
+                }
+            }
+        } else {
+            // Empty or unexpected body
+            log::warn!("Apple returned unexpected body ({} bytes): {:100}", body_text.len(), body_text);
+            let mut m = HashMap::new();
+            m.insert("_state".to_string(), Value::String("failure".to_string()));
+            m.insert("failureType".to_string(), Value::String("EmptyResponse".to_string()));
+            m.insert("customerMessage".to_string(), Value::String(
+                if status.as_u16() == 403 {
+                    "Apple 拒绝了登录请求 (403)，可能需要检查 IP 环境或使用应用专用密码".to_string()
+                } else if status.as_u16() == 429 {
+                    "Apple 登录请求过于频繁 (429)，请稍后再试".to_string()
+                } else {
+                    format!("Apple 返回了空响应 (HTTP {})", status)
+                }
+            ));
+            return Ok(m);
+        };
 
         let mut final_result = result.clone();
-        if result.contains_key("failureType") {
-            final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-        } else {
+
+        // Check for explicit success indicators
+        let has_success_fields = result.contains_key("dsPersonId")
+            || result.contains_key("passwordToken")
+            || result.contains_key("adsid");
+
+        if has_success_fields && !result.contains_key("failureType") {
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
+        } else if result.contains_key("failureType") {
+            final_result.insert("_state".to_string(), Value::String("failure".to_string()));
+            let ft = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
+            let cm = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
+            log::warn!("Apple auth failure: type={}, message={}", ft, cm);
+        } else {
+            // Ambiguous — could be a redirect or new auth flow requirement
+            final_result.insert("_state".to_string(), Value::String("failure".to_string()));
+            log::warn!("Apple auth ambiguous response (no success fields, no failureType): {:?}",
+                result.keys().collect::<Vec<_>>());
         }
 
         Ok(final_result)
