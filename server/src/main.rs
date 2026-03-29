@@ -1109,6 +1109,16 @@ async fn apple_login(
                     || failure_type.contains("-219")  // Apple MFA error code
                     || failure_type.contains("verificationCode");
 
+                // Translate Apple's cryptic customerMessage keys to readable text
+                let user_facing_msg = match error_msg {
+                    "MZFinance.BadLogin.Configurator_message" => "账号或密码错误，请检查后重试",
+                    "MZFinance.BadLogin.Configurator.message" => "账号或密码错误，请检查后重试",
+                    m if m.starts_with("MZFinance.BadLogin") => "账号或密码错误，请检查后重试",
+                    m if m.contains("account.locked") || m.contains("account disabled") => "账号已被锁定或停用",
+                    m if m.contains("rate.limit") || m.contains("too many") => "登录尝试过于频繁，请稍后再试",
+                    _ => error_msg,
+                };
+
                 log::warn!(
                     "Apple auth failure: failureType='{}', msg='{}', needs_mfa={}, has_mfa={}",
                     failure_type, error_msg, needs_mfa, has_mfa
@@ -1146,8 +1156,8 @@ async fn apple_login(
                 }
 
                 // Generic auth failure
-                log::error!("Apple auth failed for {}: {}", req.email, error_msg);
-                HttpResponse::Ok().json(ApiResponse::<String>::error(error_msg.to_string()))
+                log::error!("Apple auth failed for {}: {}", req.email, user_facing_msg);
+                HttpResponse::Ok().json(ApiResponse::<String>::error(user_facing_msg.to_string()))
             }
         }
         Err(e) => {

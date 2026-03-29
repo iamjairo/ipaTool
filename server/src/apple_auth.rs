@@ -4,6 +4,69 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Parse Apple's XML plist response into a HashMap<String, Value>.
+/// Apple's auth endpoint returns XML plist (not JSON), so we need to convert.
+fn parse_apple_plist_response(body: &str) -> Result<HashMap<String, Value>, String> {
+    // Apple returns XML plist — parse with the plist crate
+    let parsed: Result<plist::Value, _> = plist::from_bytes(body.as_bytes());
+    match parsed {
+        Ok(plist_val) => {
+            let mut map = HashMap::new();
+            if let Some(dict) = plist_val.as_dictionary() {
+                for (key, val) in dict {
+                    let json_val = plist_value_to_json(val);
+                    map.insert(key.clone(), json_val);
+                }
+            }
+            Ok(map)
+        }
+        Err(e) => {
+            // Fallback: try JSON parse (in case Apple ever returns JSON)
+            if body.trim().starts_with('{') {
+                match serde_json::from_str::<HashMap<String, Value>>(body) {
+                    Ok(m) => Ok(m),
+                    Err(_) => Err(format!("Neither valid plist nor JSON: {}", e)),
+                }
+            } else {
+                Err(format!("Failed to parse plist response: {}", e))
+            }
+        }
+    }
+}
+
+/// Convert a plist::Value to serde_json::Value
+fn plist_value_to_json(val: &plist::Value) -> Value {
+    match val {
+        plist::Value::String(s) => Value::String(s.clone()),
+        plist::Value::Boolean(b) => Value::Bool(*b),
+        plist::Value::Integer(i) => {
+            Value::String(i.to_string())
+        }
+        plist::Value::Real(f) => {
+            Value::String(format!("{}", f))
+        }
+        plist::Value::Data(d) => {
+            use base64::Engine;
+            Value::String(base64::engine::general_purpose::STANDARD.encode(d))
+        }
+        plist::Value::Date(d) => {
+            // plist::Date doesn't implement Display — use Debug as fallback
+            Value::String(format!("{:?}", d))
+        }
+        plist::Value::Array(arr) => {
+            Value::Array(arr.iter().map(plist_value_to_json).collect())
+        }
+        plist::Value::Dictionary(dict) => {
+            let m: std::collections::HashMap<String, Value> = dict
+                .iter()
+                .map(|(k, v)| (k.clone(), plist_value_to_json(v)))
+                .collect();
+            Value::Object(m.into_iter().collect())
+        }
+        _ => Value::Null,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthInfo {
     pub ds_person_id: Option<String>,
@@ -94,43 +157,28 @@ impl Store {
         let body_text = response.text().await.unwrap_or_default();
 
         log::info!(
-            "Apple auth response: status={}, body_len={}",
+            "Apple auth response: status={}, content_type_guess={}, body_len={}",
             status,
+            if body_text.trim().starts_with("<?xml") { "plist" }
+            else if body_text.trim().starts_with('{') { "json" }
+            else { "unknown" },
             body_text.len()
         );
+        log::debug!("Apple auth full body: {}", &body_text[..body_text.len().min(2000)]);
 
-        // Try to parse JSON; if it fails, build a structured error
-        let result: HashMap<String, Value> = if body_text.trim().starts_with('{') || body_text.trim().starts_with('<') {
-            // Attempt JSON parse; if Apple returned non-JSON, synthesize a failure
-            match serde_json::from_str(&body_text) {
-                Ok(v) => v,
-                Err(e) => {
-                    log::warn!("Apple returned non-JSON response ({} bytes): parse error {}", body_text.len(), e);
-                    let mut m = HashMap::new();
-                    m.insert("_state".to_string(), Value::String("failure".to_string()));
-                    m.insert("failureType".to_string(), Value::String("NonJSONResponse".to_string()));
-                    m.insert("customerMessage".to_string(), Value::String(
-                        "Apple 返回了非预期响应，请检查网络环境或稍后重试".to_string()
-                    ));
-                    return Ok(m);
-                }
+        // Parse response — Apple returns XML plist
+        let result = match parse_apple_plist_response(&body_text) {
+            Ok(m) => m,
+            Err(e) => {
+                log::error!("Failed to parse Apple response ({} bytes): {}", body_text.len(), e);
+                let mut m = HashMap::new();
+                m.insert("_state".to_string(), Value::String("failure".to_string()));
+                m.insert("failureType".to_string(), Value::String("ParseError".to_string()));
+                m.insert("customerMessage".to_string(), Value::String(
+                    "无法解析 Apple 的响应，请稍后重试".to_string()
+                ));
+                return Ok(m);
             }
-        } else {
-            // Empty or unexpected body
-            log::warn!("Apple returned unexpected body ({} bytes): {:100}", body_text.len(), body_text);
-            let mut m = HashMap::new();
-            m.insert("_state".to_string(), Value::String("failure".to_string()));
-            m.insert("failureType".to_string(), Value::String("EmptyResponse".to_string()));
-            m.insert("customerMessage".to_string(), Value::String(
-                if status.as_u16() == 403 {
-                    "Apple 拒绝了登录请求 (403)，可能需要检查 IP 环境或使用应用专用密码".to_string()
-                } else if status.as_u16() == 429 {
-                    "Apple 登录请求过于频繁 (429)，请稍后再试".to_string()
-                } else {
-                    format!("Apple 返回了空响应 (HTTP {})", status)
-                }
-            ));
-            return Ok(m);
         };
 
         let mut final_result = result.clone();
@@ -140,18 +188,29 @@ impl Store {
             || result.contains_key("passwordToken")
             || result.contains_key("adsid");
 
-        if has_success_fields && !result.contains_key("failureType") {
+        if has_success_fields {
+            // Success — clear any failure markers
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
+            log::info!("Apple auth SUCCESS for {}", email);
         } else if result.contains_key("failureType") {
-            final_result.insert("_state".to_string(), Value::String("failure".to_string()));
             let ft = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
             let cm = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
-            log::warn!("Apple auth failure: type={}, message={}", ft, cm);
+
+            if ft.is_empty() && !cm.is_empty() {
+                // Empty failureType but has customerMessage — Apple rejected login
+                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
+                log::warn!("Apple auth rejected: customerMessage='{}'", cm);
+            } else if !ft.is_empty() {
+                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
+                log::warn!("Apple auth failure: type='{}', message='{}'", ft, cm);
+            } else {
+                // Both empty — ambiguous
+                final_result.insert("_state".to_string(), Value::String("failure".to_string()));
+                log::warn!("Apple auth ambiguous failure (empty failureType & customerMessage)");
+            }
         } else {
-            // Ambiguous — could be a redirect or new auth flow requirement
             final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-            log::warn!("Apple auth ambiguous response (no success fields, no failureType): {:?}",
-                result.keys().collect::<Vec<_>>());
+            log::warn!("Apple auth unexpected response keys: {:?}", result.keys().take(10).collect::<Vec<_>>());
         }
 
         Ok(final_result)
