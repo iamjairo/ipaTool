@@ -78,6 +78,16 @@ pub struct DownloadRecord {
     pub created_at: Option<String>,
 }
 
+pub struct NewSubscription<'a> {
+    pub app_id: &'a str,
+    pub app_name: &'a str,
+    pub bundle_id: Option<&'a str>,
+    pub account_email: &'a str,
+    pub account_region: Option<&'a str>,
+    pub artwork_url: Option<&'a str>,
+    pub artist_name: Option<&'a str>,
+}
+
 pub struct Database {
     connection: std::sync::Mutex<Connection>,
 }
@@ -337,28 +347,40 @@ impl Database {
             .iter()
             .any(|(_, name, _, _, _, _)| name == "retry_count");
         if !has_retry_count {
-            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN retry_count INTEGER DEFAULT 5", []);
+            let _ = conn.execute(
+                "ALTER TABLE download_records ADD COLUMN retry_count INTEGER DEFAULT 5",
+                [],
+            );
         }
 
         let has_max_retries = table_info
             .iter()
             .any(|(_, name, _, _, _, _)| name == "max_retries");
         if !has_max_retries {
-            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN max_retries INTEGER DEFAULT 5", []);
+            let _ = conn.execute(
+                "ALTER TABLE download_records ADD COLUMN max_retries INTEGER DEFAULT 5",
+                [],
+            );
         }
 
         let has_download_speed = table_info
             .iter()
             .any(|(_, name, _, _, _, _)| name == "download_speed");
         if !has_download_speed {
-            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN download_speed REAL", []);
+            let _ = conn.execute(
+                "ALTER TABLE download_records ADD COLUMN download_speed REAL",
+                [],
+            );
         }
 
         let has_resume_position = table_info
             .iter()
             .any(|(_, name, _, _, _, _)| name == "resume_position");
         if !has_resume_position {
-            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN resume_position INTEGER DEFAULT 0", []);
+            let _ = conn.execute(
+                "ALTER TABLE download_records ADD COLUMN resume_position INTEGER DEFAULT 0",
+                [],
+            );
         }
 
         let _ = conn.execute("DELETE FROM encryption_keys WHERE key_id IS NULL", []);
@@ -439,7 +461,10 @@ impl Database {
 
     pub fn delete_admin_user(&self, username: &str) -> Result<()> {
         let conn = self.connection.lock().unwrap();
-        conn.execute("DELETE FROM admin_users WHERE username = ?", params![username])?;
+        conn.execute(
+            "DELETE FROM admin_users WHERE username = ?",
+            params![username],
+        )?;
         Ok(())
     }
 
@@ -454,8 +479,12 @@ impl Database {
 
     pub fn get_session(&self, token: &str) -> Result<Option<SessionRecord>> {
         let conn = self.connection.lock().unwrap();
-        conn.execute("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP", [])?;
-        let mut stmt = conn.prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP")?;
+        conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP",
+            [],
+        )?;
+        let mut stmt = conn
+            .prepare("SELECT * FROM sessions WHERE token = ? AND expires_at > CURRENT_TIMESTAMP")?;
         let session = stmt
             .query_row(params![token], |row| {
                 Ok(SessionRecord {
@@ -484,7 +513,10 @@ impl Database {
 
     pub fn cleanup_expired_sessions(&self) -> Result<usize> {
         let conn = self.connection.lock().unwrap();
-        let deleted = conn.execute("DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP", [])?;
+        let deleted = conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= CURRENT_TIMESTAMP",
+            [],
+        )?;
         Ok(deleted)
     }
 
@@ -780,29 +812,20 @@ impl Database {
     }
 
     // 订阅相关方法
-    pub fn add_subscription(
-        &self,
-        app_id: &str,
-        app_name: &str,
-        bundle_id: Option<&str>,
-        account_email: &str,
-        account_region: Option<&str>,
-        artwork_url: Option<&str>,
-        artist_name: Option<&str>,
-    ) -> Result<i64> {
+    pub fn add_subscription(&self, subscription: &NewSubscription<'_>) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO app_subscriptions 
              (app_id, app_name, bundle_id, account_email, account_region, artwork_url, artist_name, last_checked) 
              VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             params![
-                app_id,
-                app_name,
-                bundle_id,
-                account_email,
-                account_region,
-                artwork_url,
-                artist_name,
+                subscription.app_id,
+                subscription.app_name,
+                subscription.bundle_id,
+                subscription.account_email,
+                subscription.account_region,
+                subscription.artwork_url,
+                subscription.artist_name,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -819,7 +842,8 @@ impl Database {
 
     pub fn get_all_subscriptions(&self) -> Result<Vec<Subscription>> {
         let conn = self.connection.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM app_subscriptions ORDER BY subscribed_at DESC")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM app_subscriptions ORDER BY subscribed_at DESC")?;
         let subs = stmt
             .query_map([], |row| {
                 Ok(Subscription {
@@ -858,11 +882,7 @@ impl Database {
     }
 
     // 批量下载相关方法
-    pub fn create_batch_task(
-        &self,
-        task_name: &str,
-        total_count: i64,
-    ) -> Result<i64> {
+    pub fn create_batch_task(&self, task_name: &str, total_count: i64) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
         conn.execute(
             "INSERT INTO batch_download_tasks (task_name, total_count) VALUES (?, ?)",
@@ -890,7 +910,8 @@ impl Database {
 
     pub fn get_batch_tasks(&self) -> Result<Vec<BatchDownloadTask>> {
         let conn = self.connection.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT * FROM batch_download_tasks ORDER BY created_at DESC")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM batch_download_tasks ORDER BY created_at DESC")?;
         let tasks = stmt
             .query_map([], |row| {
                 Ok(BatchDownloadTask {
@@ -968,7 +989,10 @@ impl Database {
 
     pub fn delete_batch_task(&self, batch_id: i64) -> Result<()> {
         let conn = self.connection.lock().unwrap();
-        conn.execute("DELETE FROM batch_download_tasks WHERE id = ?", params![batch_id])?;
+        conn.execute(
+            "DELETE FROM batch_download_tasks WHERE id = ?",
+            params![batch_id],
+        )?;
         Ok(())
     }
 }

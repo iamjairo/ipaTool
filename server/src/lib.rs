@@ -11,7 +11,7 @@ pub mod web_jobs;
 pub use apple_auth::{AccountStore, AuthInfo, Store};
 pub use database::{
     Account, AdminUser, BatchDownloadItem, BatchDownloadTask, Credentials, Database, EncryptionKey,
-    SessionRecord, Subscription,
+    NewSubscription, SessionRecord, Subscription,
 };
 pub use download_manager::{AppUpdate, BatchItem, DownloadManager};
 pub use ipa_handler::{

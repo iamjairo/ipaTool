@@ -18,6 +18,7 @@ use ipa_webtool_services::{
     download_ipa_with_account, generate_mobileconfig, generate_plist, get_license_error_message,
     AccountStore, AdminUser, BatchItem, Database, DownloadManager, DownloadParams, InstallQuery,
     JobEndEvent, JobEvent, JobLogEvent, JobProgressEvent, JobProgressPayload, JobState, JobStore,
+    NewSubscription,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -965,7 +966,9 @@ async fn apple_login(
     // 否则创建新的
     let mut account_store = if req.mfa.is_some() {
         let mut pending = PENDING_MFA.write().await;
-        pending.remove(&req.email).unwrap_or_else(|| AccountStore::new(&req.email))
+        pending
+            .remove(&req.email)
+            .unwrap_or_else(|| AccountStore::new(&req.email))
     } else {
         AccountStore::new(&req.email)
     };
@@ -1192,35 +1195,34 @@ async fn get_credentials_list(data: web::Data<AppState>) -> impl Responder {
 
 // 自动登录所有保存的凭证
 async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
-    let db = match data.db.lock() {
-        Ok(db) => db,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("数据库不可用".to_string()))
-        }
-    };
+    let (credentials, enc_key) = {
+        let db = match data.db.lock() {
+            Ok(db) => db,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+            }
+        };
 
-    let credentials = match db.get_all_credentials() {
-        Ok(c) => c,
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
-        }
-    };
+        let credentials = match db.get_all_credentials() {
+            Ok(c) => c,
+            Err(e) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
+            }
+        };
 
-    // 确保 encryption key 可用
-    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
-        Ok(k) => k,
-        Err(e) => {
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "加密密钥初始化失败: {}",
-                e
-            )))
-        }
-    };
+        let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+            Ok(k) => k,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("加密密钥初始化失败: {}", e),
+                ))
+            }
+        };
 
-    // 释放 DB 锁，后续操作需要异步
-    drop(db);
+        (credentials, enc_key)
+    };
 
     let mut success = Vec::new();
     let mut need_code = Vec::new();
@@ -1354,45 +1356,45 @@ async fn refresh_login(
     };
     drop(accounts);
 
-    // 尝试从 DB 获取保存的凭证
-    let db = match data.db.lock() {
-        Ok(db) => db,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("数据库不可用".to_string()))
-        }
-    };
+    let password = {
+        let db = match data.db.lock() {
+            Ok(db) => db,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+            }
+        };
 
-    let cred = match db.get_credentials(&email) {
-        Ok(Some(c)) => c,
-        _ => {
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "未找到保存的密码，无法自动刷新。请重新登录。".to_string(),
-            ))
-        }
-    };
+        let cred = match db.get_credentials(&email) {
+            Ok(Some(c)) => c,
+            _ => {
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                    "未找到保存的密码，无法自动刷新。请重新登录。".to_string(),
+                ))
+            }
+        };
 
-    let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
-        Ok(k) => k,
-        Err(e) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
-        }
-    };
+        let enc_key = match ipa_webtool_services::crypto::ensure_encryption_key(&db) {
+            Ok(k) => k,
+            Err(e) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
+            }
+        };
 
-    let password = match ipa_webtool_services::crypto::decrypt(
-        &cred.password_encrypted,
-        &cred.iv,
-        &cred.auth_tag,
-        &enc_key,
-    ) {
-        Ok(p) => p,
-        Err(_) => {
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+        match ipa_webtool_services::crypto::decrypt(
+            &cred.password_encrypted,
+            &cred.iv,
+            &cred.auth_tag,
+            &enc_key,
+        ) {
+            Ok(password) => password,
+            Err(_) => {
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+            }
         }
     };
-    drop(db);
 
     // 重新认证
     let mut store = AccountStore::new(&email);
@@ -1896,15 +1898,17 @@ async fn add_subscription(
     req: web::Json<SubscriptionRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    match data.db.lock().unwrap().add_subscription(
-        &req.app_id,
-        &req.app_name,
-        req.bundle_id.as_deref(),
-        &req.account_email,
-        req.account_region.as_deref(),
-        req.artwork_url.as_deref(),
-        req.artist_name.as_deref(),
-    ) {
+    let subscription = NewSubscription {
+        app_id: &req.app_id,
+        app_name: &req.app_name,
+        bundle_id: req.bundle_id.as_deref(),
+        account_email: &req.account_email,
+        account_region: req.account_region.as_deref(),
+        artwork_url: req.artwork_url.as_deref(),
+        artist_name: req.artist_name.as_deref(),
+    };
+
+    match data.db.lock().unwrap().add_subscription(&subscription) {
         Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已添加".to_string())),
         Err(e) => HttpResponse::InternalServerError()
             .json(ApiResponse::<String>::error(format!("添加订阅失败: {}", e))),

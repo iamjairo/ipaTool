@@ -1,5 +1,7 @@
 use crate::database::{Database, DownloadRecord};
-use crate::ipa_handler::{download_ipa_with_account, AppleAuthService, DownloadParams, DownloadResult};
+use crate::ipa_handler::{
+    download_ipa_with_account, AppleAuthService, DownloadParams, DownloadResult,
+};
 use reqwest::Client;
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -30,7 +32,11 @@ impl DownloadManager {
         items: Vec<BatchItem<S>>,
     ) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
         let total_count = items.len() as i64;
-        let batch_id = self.db.lock().unwrap().create_batch_task(task_name, total_count)?;
+        let batch_id = self
+            .db
+            .lock()
+            .unwrap()
+            .create_batch_task(task_name, total_count)?;
 
         // 添加所有项目到数据库
         for item in &items {
@@ -62,7 +68,11 @@ impl DownloadManager {
 
         for (index, item) in items.iter().enumerate() {
             // 获取数据库中的项目ID
-            let batch_items = db.lock().unwrap().get_batch_items(batch_id).unwrap_or_default();
+            let batch_items = db
+                .lock()
+                .unwrap()
+                .get_batch_items(batch_id)
+                .unwrap_or_default();
             let db_item = batch_items.get(index);
 
             if let Some(db_item) = db_item {
@@ -81,11 +91,23 @@ impl DownloadManager {
                 match result {
                     Ok(_) => {
                         completed_count += 1;
-                        let _ = db.lock().unwrap().update_batch_item(item_id, "completed", 100, None, 0);
+                        let _ = db.lock().unwrap().update_batch_item(
+                            item_id,
+                            "completed",
+                            100,
+                            None,
+                            0,
+                        );
                     }
                     Err(e) => {
                         failed_count += 1;
-                        let _ = db.lock().unwrap().update_batch_item(item_id, "failed", 0, Some(&e.to_string()), 5);
+                        let _ = db.lock().unwrap().update_batch_item(
+                            item_id,
+                            "failed",
+                            0,
+                            Some(&e.to_string()),
+                            5,
+                        );
                     }
                 }
 
@@ -95,12 +117,22 @@ impl DownloadManager {
                     "processing"
                 };
 
-                let _ = db.lock().unwrap().update_batch_task_progress(batch_id, completed_count, failed_count, status);
+                let _ = db.lock().unwrap().update_batch_task_progress(
+                    batch_id,
+                    completed_count,
+                    failed_count,
+                    status,
+                );
             }
         }
 
         // 标记批量任务完成
-        let _ = db.lock().unwrap().update_batch_task_progress(batch_id, completed_count, failed_count, "completed");
+        let _ = db.lock().unwrap().update_batch_task_progress(
+            batch_id,
+            completed_count,
+            failed_count,
+            "completed",
+        );
     }
 
     // 带重试的下载
@@ -118,7 +150,9 @@ impl DownloadManager {
         loop {
             let _start_time = Instant::now();
 
-            match Self::download_with_resume(store, app_id, version, account_email, resume_position).await {
+            match Self::download_with_resume(store, app_id, version, account_email, resume_position)
+                .await
+            {
                 Ok(result) => {
                     // 记录成功下载
                     if let Some(metadata) = result.metadata {
@@ -146,7 +180,13 @@ impl DownloadManager {
                 }
                 Err(e) => {
                     retry_count += 1;
-                    let _ = db.lock().unwrap().update_batch_item(item_id, "retrying", 0, Some(&e.to_string()), retry_count as i64);
+                    let _ = db.lock().unwrap().update_batch_item(
+                        item_id,
+                        "retrying",
+                        0,
+                        Some(&e.to_string()),
+                        retry_count as i64,
+                    );
 
                     if retry_count >= 5 {
                         return Err(e);
@@ -183,17 +223,22 @@ impl DownloadManager {
     }
 
     // 检查应用更新
-    pub async fn check_app_updates(&self) -> Result<Vec<AppUpdate>, Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn check_app_updates(
+        &self,
+    ) -> Result<Vec<AppUpdate>, Box<dyn std::error::Error + Send + Sync>> {
         let subscriptions = self.db.lock().unwrap().get_all_subscriptions()?;
         let mut updates = Vec::new();
 
         for sub in subscriptions {
             // 查询最新版本
-            let versions = self.fetch_versions(&sub.app_id, sub.account_region.as_deref()).await?;
+            let versions = self
+                .fetch_versions(&sub.app_id, sub.account_region.as_deref())
+                .await?;
 
             if let Some(latest_version) = versions.first() {
                 let current_version = sub.current_version.as_deref().unwrap_or("");
-                let latest_version_str = latest_version.get("bundle_version")
+                let latest_version_str = latest_version
+                    .get("bundle_version")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -212,18 +257,30 @@ impl DownloadManager {
                     updates.push(update);
 
                     // 更新数据库中的版本
-                    let _ = self.db.lock().unwrap().update_subscription_version(&sub.app_id, &sub.account_email, latest_version_str);
+                    let _ = self.db.lock().unwrap().update_subscription_version(
+                        &sub.app_id,
+                        &sub.account_email,
+                        latest_version_str,
+                    );
                 }
 
                 // 更新最后检查时间
-                let _ = self.db.lock().unwrap().update_subscription_version(&sub.app_id, &sub.account_email, latest_version_str);
+                let _ = self.db.lock().unwrap().update_subscription_version(
+                    &sub.app_id,
+                    &sub.account_email,
+                    latest_version_str,
+                );
             }
         }
 
         Ok(updates)
     }
 
-    async fn fetch_versions(&self, app_id: &str, region: Option<&str>) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
+    async fn fetch_versions(
+        &self,
+        app_id: &str,
+        region: Option<&str>,
+    ) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
         let region = region.unwrap_or("US");
 
         // 尝试第一个 API

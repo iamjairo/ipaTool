@@ -10,7 +10,11 @@ const AES_256_GCM_TAG_LEN: usize = 16;
 pub fn encrypt(plaintext: &str, key_hex: &str) -> Result<(String, String, String), String> {
     let key = hex::decode(key_hex).map_err(|e| format!("invalid key hex: {}", e))?;
     if key.len() != AES_256_GCM_KEY_LEN {
-        return Err(format!("key must be {} bytes, got {}", AES_256_GCM_KEY_LEN, key.len()));
+        return Err(format!(
+            "key must be {} bytes, got {}",
+            AES_256_GCM_KEY_LEN,
+            key.len()
+        ));
     }
 
     let iv: [u8; AES_256_GCM_IV_LEN] = rand::thread_rng().gen();
@@ -20,11 +24,7 @@ pub fn encrypt(plaintext: &str, key_hex: &str) -> Result<(String, String, String
     let ciphertext = encrypt_aead(cipher, &key, Some(&iv), &[], plaintext.as_bytes(), &mut tag)
         .map_err(|e| format!("encrypt failed: {}", e))?;
 
-    Ok((
-        hex::encode(ciphertext),
-        hex::encode(iv),
-        hex::encode(tag),
-    ))
+    Ok((hex::encode(ciphertext), hex::encode(iv), hex::encode(tag)))
 }
 
 /// Decrypt AES-256-GCM ciphertext.
@@ -36,7 +36,8 @@ pub fn decrypt(
     key_hex: &str,
 ) -> Result<String, String> {
     let key = hex::decode(key_hex).map_err(|e| format!("invalid key hex: {}", e))?;
-    let ciphertext = hex::decode(ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
+    let ciphertext =
+        hex::decode(ciphertext_hex).map_err(|e| format!("invalid ciphertext hex: {}", e))?;
     let iv = hex::decode(iv_hex).map_err(|e| format!("invalid iv hex: {}", e))?;
     let tag = hex::decode(tag_hex).map_err(|e| format!("invalid tag hex: {}", e))?;
 
