@@ -612,8 +612,11 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useDebounceFn } from '@vueuse/core'
 import { useAppStore } from '../stores/app'
+import { useNotifications } from '../composables/useNotifications'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, ArrowRight, Download, UploadFilled } from '@element-plus/icons-vue'
+
+const notifications = useNotifications()
 
 const props = defineProps({
   selectedApp: {
@@ -1167,6 +1170,8 @@ const connectToSSE = (jobId, queueItem) => {
       
       if (data?.error) {
         addLog(`[错误] ${data.error}`)
+        const appName = props.selectedApp?.trackName || appid.value
+        notifications.notifyDownloadFailed(appName, data.error)
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, {
           status: 'failed',
@@ -1215,6 +1220,9 @@ const connectToSSE = (jobId, queueItem) => {
       const data = JSON.parse(ev.data || '{}')
       if (data.status === 'ready') {
         addLog('[完成] 任务已就绪')
+        // 发送下载完成通知
+        const appName = props.selectedApp?.trackName || appid.value
+        notifications.notifyDownloadComplete(appName)
         // 获取任务信息，包括安装URL
         fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`)
           .then(res => res.json())
@@ -1231,6 +1239,8 @@ const connectToSSE = (jobId, queueItem) => {
           })
       } else if (data.status === 'failed') {
         addLog('[失败] 任务失败')
+        const appName = props.selectedApp?.trackName || appid.value
+        notifications.notifyDownloadFailed(appName)
         if (queueItem) {
           queueItem.status = 'error'
         }

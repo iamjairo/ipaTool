@@ -190,6 +190,71 @@
               </el-button>
             </el-form>
           </section>
+
+          <!-- Notification settings section -->
+          <section>
+            <h4 class="text-sm font-semibold text-gray-900 dark:text-white mb-4 pb-2 border-b border-gray-200 dark:border-gray-700">
+              🔔 通知设置
+            </h4>
+
+            <!-- Permission -->
+            <div
+              v-if="notifications.permission.value !== 'granted'"
+              class="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl"
+            >
+              <p class="text-sm text-yellow-800 dark:text-yellow-300 mb-2">
+                浏览器通知未授权，请先开启权限。
+              </p>
+              <el-button
+                type="warning"
+                size="small"
+                @click="handleRequestNotificationPermission"
+              >
+                开启通知权限
+              </el-button>
+            </div>
+            <div
+              v-else
+              class="mb-4 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl"
+            >
+              <p class="text-sm text-green-700 dark:text-green-300">
+                ✅ 浏览器通知已授权
+              </p>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium text-gray-700 dark:text-gray-300">新版本检测</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">订阅应用有更新时通知</p>
+                </div>
+                <el-switch
+                  :model-value="notifications.settings.value.versionUpdate"
+                  @change="(v) => handleToggleNotification('versionUpdate', v)"
+                />
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium text-gray-700 dark:text-gray-300">下载完成</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">IPA 下载成功时通知</p>
+                </div>
+                <el-switch
+                  :model-value="notifications.settings.value.downloadComplete"
+                  @change="(v) => handleToggleNotification('downloadComplete', v)"
+                />
+              </div>
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium text-gray-700 dark:text-gray-300">下载失败</p>
+                  <p class="text-xs text-gray-500 dark:text-gray-400">IPA 下载出错时通知</p>
+                </div>
+                <el-switch
+                  :model-value="notifications.settings.value.downloadFailed"
+                  @change="(v) => handleToggleNotification('downloadFailed', v)"
+                />
+              </div>
+            </div>
+          </section>
         </div>
       </el-drawer>
 
@@ -259,15 +324,17 @@
 </template>
 
 <script setup>
-import { onMounted, watch, ref } from 'vue'
+import { onMounted, onUnmounted, watch, ref } from 'vue'
 import { useDark } from './composables/useDark'
 import { useAppStore } from './stores/app'
+import { useNotifications } from './composables/useNotifications'
 import TabLayout from './components/TabLayout.vue'
 import Login from './components/Login.vue'
 import { ElMessage } from 'element-plus'
 
 const { isDark, toggleDark } = useDark()
 const appStore = useAppStore()
+const notifications = useNotifications()
 
 // Auth state: 'loading' | 'unauthenticated' | 'authenticated'
 const authState = ref('loading')
@@ -341,6 +408,27 @@ function onLoginSuccess() {
   authState.value = 'authenticated'
 }
 
+async function handleRequestNotificationPermission() {
+  const result = await notifications.requestPermission()
+  if (result === 'granted') {
+    ElMessage.success('通知权限已开启')
+  } else {
+    ElMessage.warning('通知权限被拒绝，可在浏览器设置中手动开启')
+  }
+}
+
+function handleToggleNotification(type, value) {
+  notifications.toggle(type, value)
+  // Start/stop version polling accordingly
+  if (type === 'versionUpdate') {
+    if (value) {
+      notifications.startVersionPolling()
+    } else {
+      notifications.stopVersionPolling()
+    }
+  }
+}
+
 async function handleLogout() {
   try {
     await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'same-origin' })
@@ -387,6 +475,11 @@ onMounted(() => {
   isDark.value = prefersDark
   updateDarkClass()
   checkAuth()
+  notifications.init()
+})
+
+onUnmounted(() => {
+  notifications.stopVersionPolling()
 })
 
 watch(isDark, () => {

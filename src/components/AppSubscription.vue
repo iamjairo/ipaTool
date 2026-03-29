@@ -254,6 +254,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Delete } from '@element-plus/icons-vue'
+import { useNotifications } from '../composables/useNotifications'
+
+const notifications = useNotifications()
 
 const API_BASE = '/api'
 
@@ -299,6 +302,14 @@ const checkUpdates = async () => {
       updates.value = data.data.updates || []
       if (updates.value.length > 0) {
         ElMessage.success(`发现 ${updates.value.length} 个更新`)
+        // 逐个发送浏览器通知
+        for (const update of updates.value) {
+          notifications.notifyVersionUpdate(
+            update.app_name,
+            update.current_version,
+            update.latest_version
+          )
+        }
       } else {
         ElMessage.info('所有应用都是最新版本')
       }
