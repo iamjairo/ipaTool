@@ -1412,7 +1412,8 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
                         .and_then(|v| v.as_str())
                         .unwrap_or("登录失败");
 
-                    if err_msg.contains("verification code")
+                    if err_msg == "MZFinance.BadLogin.Configurator_message"
+                        || err_msg.contains("verification code")
                         || err_msg.contains("two-factor")
                         || err_msg.contains("MFA")
                     {

@@ -4,11 +4,37 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// Best-effort normalize Apple's XML-ish plist responses.
+/// Some endpoints wrap a plist inside <Document> or return a bare <dict>.
+fn normalize_apple_plist_body(body: &str) -> String {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if let (Some(start), Some(end)) = (trimmed.find("<plist"), trimmed.rfind("</plist>")) {
+        let end = end + "</plist>".len();
+        return trimmed[start..end].trim().to_string();
+    }
+
+    if let (Some(start), Some(end)) = (trimmed.find("<dict"), trimmed.rfind("</dict>")) {
+        let end = end + "</dict>".len();
+        return trimmed[start..end].trim().to_string();
+    }
+
+    if trimmed.contains("<key>") {
+        return format!("<dict>{}</dict>", trimmed);
+    }
+
+    trimmed.to_string()
+}
+
 /// Parse Apple's XML plist response into a HashMap<String, Value>.
-/// Apple's auth endpoint returns XML plist (not JSON), so we need to convert.
+/// Apple's auth/bag endpoints return XML plist (not JSON), so we need to convert.
 fn parse_apple_plist_response(body: &str) -> Result<HashMap<String, Value>, String> {
-    // Apple returns XML plist — parse with the plist crate
-    let parsed: Result<plist::Value, _> = plist::from_bytes(body.as_bytes());
+    let normalized = normalize_apple_plist_body(body);
+
+    let parsed: Result<plist::Value, _> = plist::from_bytes(normalized.as_bytes());
     match parsed {
         Ok(plist_val) => {
             let mut map = HashMap::new();
@@ -28,13 +54,18 @@ fn parse_apple_plist_response(body: &str) -> Result<HashMap<String, Value>, Stri
                     Err(je) => log::warn!("JSON fallback also failed: {}", je),
                 }
             }
+
             // Neither plist nor JSON — log raw body for debugging
             log::error!(
                 "Apple returned unparseable response ({} bytes): {:300}",
                 body.len(),
                 body
             );
-            Err(format!("Failed to parse Apple response: {} (body_len={})", e, body.len()))
+            Err(format!(
+                "Failed to parse Apple response: {} (body_len={})",
+                e,
+                body.len()
+            ))
         }
     }
 }
@@ -44,23 +75,14 @@ fn plist_value_to_json(val: &plist::Value) -> Value {
     match val {
         plist::Value::String(s) => Value::String(s.clone()),
         plist::Value::Boolean(b) => Value::Bool(*b),
-        plist::Value::Integer(i) => {
-            Value::String(i.to_string())
-        }
-        plist::Value::Real(f) => {
-            Value::String(format!("{}", f))
-        }
+        plist::Value::Integer(i) => Value::String(i.to_string()),
+        plist::Value::Real(f) => Value::String(format!("{}", f)),
         plist::Value::Data(d) => {
             use base64::Engine;
             Value::String(base64::engine::general_purpose::STANDARD.encode(d))
         }
-        plist::Value::Date(d) => {
-            // plist::Date doesn't implement Display — use Debug as fallback
-            Value::String(format!("{:?}", d))
-        }
-        plist::Value::Array(arr) => {
-            Value::Array(arr.iter().map(plist_value_to_json).collect())
-        }
+        plist::Value::Date(d) => Value::String(format!("{:?}", d)),
+        plist::Value::Array(arr) => Value::Array(arr.iter().map(plist_value_to_json).collect()),
         plist::Value::Dictionary(dict) => {
             let m: std::collections::HashMap<String, Value> = dict
                 .iter()
@@ -88,27 +110,53 @@ pub struct Store {
 
 impl Store {
     pub fn new() -> Self {
+        // IMPORTANT: Apple auth flow can return 302 redirects that must be handled
+        // by retrying POST to the redirect location. Disable automatic redirect following.
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .cookie_store(true)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap();
 
-        // 生成 GUID（使用 MAC 地址或随机 UUID）
         let guid = Self::generate_guid();
 
         Store { client, guid }
     }
 
     fn generate_guid() -> String {
-        // 简单的 GUID 生成
-        uuid::Uuid::new_v4()
+        // Match ipatool reference: use MAC address (AABBCCDDEEFF) as GUID.
+        // Best-effort on Linux: read /sys/class/net/*/address.
+        if let Ok(entries) = std::fs::read_dir("/sys/class/net") {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name == "lo" {
+                    continue;
+                }
+
+                let addr_path = entry.path().join("address");
+                if let Ok(addr) = std::fs::read_to_string(addr_path) {
+                    let mac = addr.trim();
+                    if mac.len() >= 17 && mac.contains(':') {
+                        let guid = mac.replace(':', "").to_uppercase();
+                        if guid.len() == 12 {
+                            return guid;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: random but keep length compatible (12 hex chars)
+        let raw = uuid::Uuid::new_v4()
             .to_string()
             .to_uppercase()
-            .replace("-", "")
+            .replace('-', "");
+        raw.chars().take(12).collect()
     }
 
-    pub fn get_headers() -> header::HeaderMap {
+    fn base_headers() -> header::HeaderMap {
         let mut headers = header::HeaderMap::new();
         headers.insert(
             "User-Agent",
@@ -117,11 +165,64 @@ impl Store {
                 .parse()
                 .unwrap(),
         );
+        headers
+    }
+
+    fn form_headers() -> header::HeaderMap {
+        let mut headers = Self::base_headers();
         headers.insert(
             "Content-Type",
             "application/x-www-form-urlencoded".parse().unwrap(),
         );
         headers
+    }
+
+    fn ensure_guid_query(endpoint: &str, guid: &str) -> String {
+        if endpoint.contains("guid=") {
+            return endpoint.to_string();
+        }
+        if endpoint.contains('?') {
+            format!("{}&guid={}", endpoint, guid)
+        } else {
+            format!("{}?guid={}", endpoint, guid)
+        }
+    }
+
+    async fn resolve_auth_endpoint(&self) -> Result<String, String> {
+        let bag_url = format!("https://init.itunes.apple.com/bag.xml?guid={}", self.guid);
+        let response = self
+            .client
+            .get(&bag_url)
+            .headers(Self::base_headers())
+            .header("Accept", "application/xml")
+            .send()
+            .await
+            .map_err(|e| format!("bag request failed: {}", e))?;
+
+        let status = response.status();
+        let body_text = response
+            .text()
+            .await
+            .map_err(|e| format!("bag read body failed: {}", e))?;
+
+        if status != StatusCode::OK {
+            return Err(format!(
+                "bag returned non-200 status={} body_len={}",
+                status,
+                body_text.len()
+            ));
+        }
+
+        let parsed = parse_apple_plist_response(&body_text)?;
+
+        let endpoint = parsed
+            .get("urlBag")
+            .and_then(|v| v.as_object())
+            .and_then(|obj| obj.get("authenticateAccount"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| "bag missing urlBag.authenticateAccount".to_string())?;
+
+        Ok(endpoint.to_string())
     }
 
     pub async fn authenticate(
@@ -130,18 +231,30 @@ impl Store {
         password: &str,
         mfa: Option<&str>,
     ) -> Result<HashMap<String, Value>, Box<dyn std::error::Error + Send + Sync>> {
-        let base_url = "https://auth.itunes.apple.com/auth/v1/native/fast";
-        let mut url = format!("{}?guid={}", base_url, self.guid);
+        // Prefer bag.xml-derived auth endpoint (more stable across regions/redirects).
+        let fallback = format!(
+            "https://auth.itunes.apple.com/auth/v1/native/fast?guid={}",
+            self.guid
+        );
+
+        let endpoint = match self.resolve_auth_endpoint().await {
+            Ok(ep) => ep,
+            Err(e) => {
+                log::warn!(
+                    "Apple bag endpoint resolve failed (guid={}): {}. Falling back to {}",
+                    self.guid,
+                    e,
+                    fallback
+                );
+                fallback
+            }
+        };
+
+        let mut url = Self::ensure_guid_query(&endpoint, &self.guid);
         let mut last_result: Option<HashMap<String, Value>> = None;
 
-        // auth.itunes.apple.com/auth/v1/native/fast behaves differently from
-        // buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate:
-        // - initial password-only login can start at attempt=1
-        // - MFA retry must start at attempt=2, otherwise Apple often returns HTTP 500
-        let start_attempt = if mfa.is_some() { 2 } else { 1 };
-
-        for attempt in start_attempt..=4u32 {
-            let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(" ", ""));
+        for attempt in 1..=4u32 {
+            let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(' ', ""));
 
             let mut auth_data = HashMap::new();
             auth_data.insert("appleId", email.to_string());
@@ -153,20 +266,23 @@ impl Store {
 
             log::info!(
                 "Apple auth attempt {}: url={}, has_mfa={}, guid={}",
-                attempt, url, mfa.is_some(), self.guid
+                attempt,
+                url,
+                mfa.is_some(),
+                self.guid
             );
 
             let response = self
                 .client
                 .post(&url)
-                .headers(Self::get_headers())
+                .headers(Self::form_headers())
                 .form(&auth_data)
                 .send()
                 .await?;
 
             let status = response.status();
 
-            // Handle 302 redirect — follow to new URL
+            // Handle 302 redirect — follow to new URL and retry
             if status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY {
                 if let Some(location) = response.headers().get("location") {
                     if let Ok(loc_str) = location.to_str() {
@@ -191,21 +307,32 @@ impl Store {
                 Err(e) => {
                     log::error!(
                         "Failed to parse Apple response ({} bytes, attempt {}): {}",
-                        body_text.len(), attempt, e
+                        body_text.len(),
+                        attempt,
+                        e
                     );
                     let mut m = HashMap::new();
                     m.insert("_state".to_string(), Value::String("failure".to_string()));
-                    m.insert("failureType".to_string(), Value::String("ParseError".to_string()));
-                    m.insert("customerMessage".to_string(), Value::String(
-                        "无法解析 Apple 的响应，请稍后重试".to_string()
-                    ));
+                    m.insert(
+                        "failureType".to_string(),
+                        Value::String("ParseError".to_string()),
+                    );
+                    m.insert(
+                        "customerMessage".to_string(),
+                        Value::String("无法解析 Apple 的响应，请稍后重试".to_string()),
+                    );
                     return Ok(m);
                 }
             };
 
-            let failure_type = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
+            let failure_type = result
+                .get("failureType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
-            // Check for -5000 (InvalidCredentials) on attempt 1 → auto retry
+            // Match ipatool reference behavior:
+            // attempt 1 may return InvalidCredentials (-5000) even for correct passwords.
+            // auto-retry once (or until attempt limit).
             if attempt == 1 && failure_type == "-5000" {
                 log::info!("Apple auth: InvalidCredentials on attempt 1, auto-retrying");
                 last_result = Some(result);
@@ -220,16 +347,21 @@ impl Store {
         let mut final_result = result.clone();
 
         // Check for success
-        let has_success = result.contains_key("dsPersonId")
-            || result.contains_key("passwordToken");
+        let has_success = result.contains_key("dsPersonId") || result.contains_key("passwordToken");
 
         if has_success {
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
             log::info!("Apple auth SUCCESS for {}", email);
         } else {
             final_result.insert("_state".to_string(), Value::String("failure".to_string()));
-            let ft = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
-            let cm = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
+            let ft = result
+                .get("failureType")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let cm = result
+                .get("customerMessage")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             log::warn!("Apple auth failure: type='{}', msg='{}'", ft, cm);
         }
 
@@ -256,7 +388,7 @@ impl Store {
         }
         purchase_data.insert("pricingParameters", Value::String("STDQ".to_string()));
 
-        let mut headers = Self::get_headers();
+        let mut headers = Self::form_headers();
         if let Some(ds_id) = &auth_info.ds_person_id {
             headers.insert("X-Dsid", ds_id.parse().unwrap());
             headers.insert("iCloud-DSID", ds_id.parse().unwrap());
@@ -297,7 +429,7 @@ impl Store {
             download_data.insert("externalVersionId", Value::String(ver_id.to_string()));
         }
 
-        let mut headers = Self::get_headers();
+        let mut headers = Self::form_headers();
         if let Some(ds_id) = &auth_info.ds_person_id {
             headers.insert("X-Dsid", ds_id.parse().unwrap());
             headers.insert("iCloud-DSID", ds_id.parse().unwrap());
