@@ -24,12 +24,17 @@ fn parse_apple_plist_response(body: &str) -> Result<HashMap<String, Value>, Stri
             // Fallback: try JSON parse (in case Apple ever returns JSON)
             if body.trim().starts_with('{') {
                 match serde_json::from_str::<HashMap<String, Value>>(body) {
-                    Ok(m) => Ok(m),
-                    Err(_) => Err(format!("Neither valid plist nor JSON: {}", e)),
+                    Ok(m) => return Ok(m),
+                    Err(je) => log::warn!("JSON fallback also failed: {}", je),
                 }
-            } else {
-                Err(format!("Failed to parse plist response: {}", e))
             }
+            // Neither plist nor JSON — log raw body for debugging
+            log::error!(
+                "Apple returned unparseable response ({} bytes): {:300}",
+                body.len(),
+                body
+            );
+            Err(format!("Failed to parse Apple response: {} (body_len={})", e, body.len()))
         }
     }
 }

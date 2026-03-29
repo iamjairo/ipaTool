@@ -380,7 +380,12 @@ const loginAccount = async () => {
 
 		// Business logic error (bad password, account locked, etc.)
 		if (!data.ok) {
-			ElMessage.error(`登录失败：${data.error || '未知错误'}`)
+			const errMsg = data.error || '未知错误'
+			ElMessage.error(`登录失败：${errMsg}`)
+			// If it looks like a credential error, hint about MFA
+			if (errMsg.includes('密码') || errMsg.includes('BadLogin')) {
+				mfaRequired.value = true
+			}
 			logging.value = false
 			return
 		}

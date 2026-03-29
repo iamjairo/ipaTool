@@ -267,16 +267,18 @@ const handleChangePassword = async () => {
     }
 
     const json = await res.json()
-    appStore.setAuthUser(json?.data || null)
 
     ElMessage.success('密码修改成功，请使用新密码重新登录')
     showChangePassword.value = false
-    appStore.authState.user = null
 
+    // Clear form
     pwdForm.new_username = ''
     pwdForm.current_password = ''
     pwdForm.new_password = ''
     pwdForm.confirm_password = ''
+
+    // Properly logout: clear server session + cookie + local state
+    await appStore.logoutAdmin()
   } catch (e) {
     ElMessage.error(e?.message || '修改密码失败')
   } finally {
