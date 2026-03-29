@@ -64,6 +64,7 @@
         @accounts-updated="handleAccountsUpdated"
         @remove-item="emit('remove-item', $event)"
         @clear-all="emit('clear-queue')"
+        @logout="emit('logout')"
       />
     </div>
 
@@ -122,7 +123,7 @@ import AppSubscription from './AppSubscription.vue'
 import Settings from './Settings.vue'
 
 const appStore = useAppStore()
-const emit = defineEmits(['app-selected', 'download-started', 'accounts-updated', 'remove-item', 'clear-queue'])
+const emit = defineEmits(['app-selected', 'download-started', 'accounts-updated', 'remove-item', 'clear-queue', 'logout'])
 const isMobile = ref(false)
 
 const checkMobile = () => {

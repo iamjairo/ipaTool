@@ -114,6 +114,7 @@
           @accounts-updated="handleAccountsUpdated"
           @remove-item="handleRemoveItem"
           @clear-queue="handleClearQueue"
+          @logout="handleLogout"
         />
       </main>
 
