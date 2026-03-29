@@ -32,6 +32,7 @@ use uuid::Uuid;
 
 const ADMIN_SESSION_COOKIE: &str = "ipa_admin_session";
 const SESSION_TTL_DAYS: i64 = 30;
+const PENDING_MFA_TTL_MINUTES: i64 = 10;
 
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -165,17 +166,144 @@ struct AppState {
     job_store: JobStore,
 }
 
+#[derive(Clone)]
+struct PendingMfaSession {
+    account_store: AccountStore,
+    password_hash: String,
+    created_at: chrono::DateTime<Utc>,
+}
+
 // 模拟的账号存储（生产环境应该使用数据库）
 lazy_static::lazy_static! {
     static ref ACCOUNTS: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
     // MFA 第一轮失败后暂存 AccountStore（保留 GUID），等待用户提交验证码后复用
-    static ref PENDING_MFA: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
+    static ref PENDING_MFA: RwLock<HashMap<String, PendingMfaSession>> = RwLock::new(HashMap::new());
 }
 
 fn hash_password(password: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(password.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+fn normalize_mfa_code(mfa: Option<&str>) -> Option<String> {
+    mfa.map(|code| code.trim().replace(' ', ""))
+        .filter(|code| !code.is_empty())
+}
+
+fn is_pending_mfa_expired(created_at: chrono::DateTime<Utc>) -> bool {
+    Utc::now().signed_duration_since(created_at) > Duration::minutes(PENDING_MFA_TTL_MINUTES)
+}
+
+async fn save_pending_mfa(email: &str, password: &str, account_store: AccountStore) {
+    let mut pending = PENDING_MFA.write().await;
+    pending.insert(
+        email.to_string(),
+        PendingMfaSession {
+            account_store,
+            password_hash: hash_password(password),
+            created_at: Utc::now(),
+        },
+    );
+}
+
+async fn clear_pending_mfa(email: &str) {
+    let mut pending = PENDING_MFA.write().await;
+    pending.remove(email);
+}
+
+async fn take_pending_mfa(email: &str, password: &str) -> Result<AccountStore, String> {
+    let pending_session = {
+        let mut pending = PENDING_MFA.write().await;
+        pending.remove(email)
+    };
+
+    let pending_session = pending_session.ok_or_else(|| {
+        "验证码会话不存在或已丢失，请重新输入账号密码并再次登录以获取新的验证码".to_string()
+    })?;
+
+    if is_pending_mfa_expired(pending_session.created_at) {
+        return Err(format!(
+            "验证码会话已超过 {} 分钟，请重新登录以获取新的验证码",
+            PENDING_MFA_TTL_MINUTES
+        ));
+    }
+
+    if pending_session.password_hash != hash_password(password) {
+        return Err("登录密码已变更，请重新输入账号密码并再次登录以重新发起验证".to_string());
+    }
+
+    Ok(pending_session.account_store)
+}
+
+fn apple_auth_failure_details(
+    result: &serde_json::Map<String, Value>,
+    has_mfa: bool,
+) -> (String, String, bool) {
+    let failure_type = result
+        .get("failureType")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let customer_message = result
+        .get("customerMessage")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let normalized_message = customer_message.to_lowercase();
+    let bad_login_without_mfa = !has_mfa
+        && failure_type.is_empty()
+        && matches!(
+            customer_message.as_str(),
+            "MZFinance.BadLogin.Configurator_message" | "MZFinance.BadLogin.Configurator.message"
+        );
+
+    let explicit_mfa_message = normalized_message.contains("verification code")
+        || normalized_message.contains("two-factor")
+        || normalized_message.contains("two step")
+        || normalized_message.contains("two-step")
+        || normalized_message.contains("2fa")
+        || normalized_message.contains("mfa");
+
+    let explicit_mfa_failure = failure_type.contains("verificationCode")
+        || failure_type.contains("authCode")
+        || failure_type == "-22938"
+        || failure_type == "-20101";
+
+    let needs_mfa = bad_login_without_mfa || explicit_mfa_message || explicit_mfa_failure;
+
+    let user_facing_msg = if bad_login_without_mfa {
+        "此账号需要二次验证，请在验证码输入框输入 6 位验证码后再次点击登录".to_string()
+    } else if explicit_mfa_message || explicit_mfa_failure {
+        if has_mfa {
+            "验证码无效、已过期，或当前验证会话已失效，请检查后重试".to_string()
+        } else {
+            customer_message.clone()
+        }
+    } else {
+        match customer_message.as_str() {
+            "MZFinance.BadLogin.Configurator_message"
+            | "MZFinance.BadLogin.Configurator.message" => {
+                "账号或密码错误，请检查后重试".to_string()
+            }
+            m if m.starts_with("MZFinance.BadLogin") => "账号或密码错误，请检查后重试".to_string(),
+            m if m.contains("account.locked") || m.contains("account disabled") => {
+                "账号已被锁定或停用".to_string()
+            }
+            m if m.contains("rate.limit") || m.contains("too many") => {
+                "登录尝试过于频繁，请稍后再试".to_string()
+            }
+            _ if !customer_message.is_empty() => customer_message.clone(),
+            _ if !failure_type.is_empty() => failure_type.clone(),
+            _ => "登录失败，Apple 未返回具体错误信息".to_string(),
+        }
+    };
+
+    (failure_type, user_facing_msg, needs_mfa)
 }
 
 fn session_expires_at() -> String {
@@ -963,26 +1091,33 @@ async fn apple_login(
     req: web::Json<AppleLoginRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let has_mfa = req.mfa.is_some();
+    let mfa_code = normalize_mfa_code(req.mfa.as_deref());
+    let has_mfa = mfa_code.is_some();
     log::info!(
         "Apple login attempt: email={}, has_mfa={}, mfa_len={}",
         req.email,
         has_mfa,
-        req.mfa.as_ref().map(|s| s.len()).unwrap_or(0)
+        mfa_code.as_ref().map(|s| s.len()).unwrap_or(0)
     );
 
     // 如果有 MFA code，优先复用第一轮暂存的 AccountStore（保留 GUID）
     // 否则创建新的
     let mut account_store = if has_mfa {
-        let mut pending = PENDING_MFA.write().await;
-        match pending.remove(&req.email) {
-            Some(store) => {
+        match take_pending_mfa(&req.email, &req.password).await {
+            Ok(store) => {
                 log::info!("Reusing pending MFA session for {}", req.email);
                 store
             }
-            None => {
-                log::warn!("No pending MFA session found for {}, creating fresh (GUID mismatch risk)", req.email);
-                AccountStore::new(&req.email)
+            Err(message) => {
+                log::warn!(
+                    "Pending MFA session unavailable for {}: {}",
+                    req.email,
+                    message
+                );
+                return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                    "status": "need_restart",
+                    "message": message,
+                })));
             }
         }
     } else {
@@ -990,7 +1125,7 @@ async fn apple_login(
     };
 
     match account_store
-        .authenticate(&req.password, req.mfa.as_deref())
+        .authenticate(&req.password, mfa_code.as_deref())
         .await
     {
         Ok(result) => {
@@ -1007,10 +1142,7 @@ async fn apple_login(
 
             if state == "success" {
                 // 清理可能残留的 pending MFA 条目
-                {
-                    let mut pending = PENDING_MFA.write().await;
-                    pending.remove(&req.email);
-                }
+                clear_pending_mfa(&req.email).await;
 
                 // 生成 token
                 let token = uuid::Uuid::new_v4().to_string();
@@ -1078,94 +1210,49 @@ async fn apple_login(
                     "displayName": result.get("displayName"),
                 })))
             } else {
-                // 检查是否是 MFA 要求
-                let failure_type = result
-                    .get("failureType")
+                let result_obj: serde_json::Map<String, Value> =
+                    result.clone().into_iter().collect();
+                let (failure_type, user_facing_msg, needs_mfa) =
+                    apple_auth_failure_details(&result_obj, has_mfa);
+                let customer_message = result_obj
+                    .get("customerMessage")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                let error_msg = result
-                    .get("customerMessage")
-                    .and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| {
-                        if failure_type.is_empty() {
-                            "登录失败，Apple 未返回具体错误信息"
-                        } else {
-                            failure_type
-                        }
-                    });
-
-                // MFA detection matching ipatool reference:
-                // failureType == "" && no authCode provided && CustomerMessage == BadLogin
-                // means Apple wants a 2FA code appended to password
-                let bad_login_without_mfa = failure_type.is_empty()
-                    && !has_mfa
-                    && (error_msg == "MZFinance.BadLogin.Configurator_message"
-                        || error_msg.contains("BadLogin"));
-
-                let needs_mfa = bad_login_without_mfa
-                    || error_msg.to_lowercase().contains("verification code")
-                    || error_msg.to_lowercase().contains("two-factor")
-                    || error_msg.to_lowercase().contains("mfa")
-                    || error_msg.to_lowercase().contains("2fa")
-                    || error_msg.to_lowercase().contains("two-step")
-                    || failure_type.contains("-219")
-                    || failure_type.contains("verificationCode");
-
-                // Translate Apple's cryptic customerMessage keys to readable text
-                let user_facing_msg = match error_msg {
-                    "MZFinance.BadLogin.Configurator_message" => "账号或密码错误，请检查后重试",
-                    "MZFinance.BadLogin.Configurator.message" => "账号或密码错误，请检查后重试",
-                    m if m.starts_with("MZFinance.BadLogin") => "账号或密码错误，请检查后重试",
-                    m if m.contains("account.locked") || m.contains("account disabled") => "账号已被锁定或停用",
-                    m if m.contains("rate.limit") || m.contains("too many") => "登录尝试过于频繁，请稍后再试",
-                    _ => error_msg,
-                };
-
                 log::warn!(
-                    "Apple auth failure: failureType='{}', msg='{}', needs_mfa={}, has_mfa={}",
-                    failure_type, error_msg, needs_mfa, has_mfa
+                    "Apple auth failure: failureType='{}', customerMessage='{}', needs_mfa={}, has_mfa={}",
+                    failure_type, customer_message, needs_mfa, has_mfa
                 );
 
                 if needs_mfa && !has_mfa {
                     // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
-                    {
-                        let mut pending = PENDING_MFA.write().await;
-                        pending.insert(req.email.clone(), account_store);
-                    }
+                    save_pending_mfa(&req.email, &req.password, account_store).await;
 
                     log::info!("Saved pending MFA session for {}", req.email);
 
                     return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                         "status": "need_mfa",
-                        "message": "此账号需要二次验证，请在验证码输入框输入 6 位验证码后再次点击登录",
+                        "message": user_facing_msg,
                     })));
                 }
 
                 // MFA code provided but still got MFA-related error — code may be wrong/expired
                 if needs_mfa && has_mfa {
                     // Re-save AccountStore for retry
-                    {
-                        let mut pending = PENDING_MFA.write().await;
-                        pending.insert(req.email.clone(), account_store);
-                    }
+                    save_pending_mfa(&req.email, &req.password, account_store).await;
 
                     log::warn!("MFA code rejected for {}", req.email);
 
                     return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                         "status": "mfa_failed",
-                        "message": "验证码无效或已过期，请检查后重新输入",
+                        "message": user_facing_msg,
                     })));
                 }
 
                 // Non-MFA auth failure: do not blindly keep a pending MFA session.
                 // Preserve pending state only for explicit MFA branches above, otherwise
                 // wrong-password / locked-account flows can poison the next login attempt.
-                {
-                    let mut pending = PENDING_MFA.write().await;
-                    pending.remove(&req.email);
-                }
+                clear_pending_mfa(&req.email).await;
 
                 log::error!("Apple auth failed for {}: {}", req.email, user_facing_msg);
                 HttpResponse::Ok().json(ApiResponse::<String>::error(user_facing_msg.to_string()))
@@ -1180,15 +1267,17 @@ async fn apple_login(
                 || err_msg.contains("expected value")
             {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(
-                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试使用应用专用密码登录".to_string()
+                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试使用应用专用密码登录"
+                        .to_string(),
                 ))
             } else if err_msg.contains("timed out") || err_msg.contains("deadline") {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(
-                    "连接 Apple 超时，请检查网络环境".to_string()
+                    "连接 Apple 超时，请检查网络环境".to_string(),
                 ))
             } else {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(format!(
-                    "登录失败: {}", err_msg
+                    "登录失败: {}",
+                    err_msg
                 )))
             }
         }
@@ -1664,8 +1753,9 @@ async fn change_password(
         let trimmed = new_name.trim();
         if !trimmed.is_empty() && trimmed != admin.username {
             if let Err(e) = db.rename_admin_user(&admin.username, trimmed) {
-                return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error(format!("修改用户名失败: {}", e)));
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("修改用户名失败: {}", e),
+                ));
             }
             trimmed.to_string()
         } else {

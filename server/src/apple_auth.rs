@@ -4,6 +4,35 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
+fn extract_account_metadata(result: &HashMap<String, Value>) -> (Option<String>, Option<String>) {
+    let account_info = result
+        .get("accountInfo")
+        .and_then(|value| value.as_object());
+
+    let email = account_info
+        .and_then(|account| account.get("appleId"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+
+    let display_name = account_info
+        .and_then(|account| account.get("address"))
+        .and_then(|value| value.as_object())
+        .map(|address| {
+            [
+                address.get("firstName").and_then(|value| value.as_str()),
+                address.get("lastName").and_then(|value| value.as_str()),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|part| !part.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join(" ")
+        })
+        .filter(|name| !name.is_empty());
+
+    (display_name, email)
+}
+
 /// Best-effort normalize Apple's XML-ish plist responses.
 /// Some endpoints wrap a plist inside <Document> or return a bare <dict>.
 fn normalize_apple_plist_body(body: &str) -> String {
@@ -200,6 +229,18 @@ impl Store {
         }
     }
 
+    fn resolve_redirect_url(current_url: &str, location: &str, guid: &str) -> Option<String> {
+        let candidate = match reqwest::Url::parse(location) {
+            Ok(url) => url,
+            Err(_) => {
+                let base = reqwest::Url::parse(current_url).ok()?;
+                base.join(location).ok()?
+            }
+        };
+
+        Some(Self::ensure_guid_query(candidate.as_str(), guid))
+    }
+
     async fn resolve_auth_endpoint(&self) -> Result<String, String> {
         let bag_url = format!("https://init.itunes.apple.com/bag.xml?guid={}", self.guid);
         let response = self
@@ -271,6 +312,7 @@ impl Store {
             let auth_body = build_xml_plist_body(&[
                 ("appleId", email.to_string()),
                 ("attempt", attempt.to_string()),
+                ("createSession", "true".to_string()),
                 ("guid", self.guid.clone()),
                 ("password", combined_password),
                 ("rmp", "0".to_string()),
@@ -300,11 +342,27 @@ impl Store {
             if status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY {
                 if let Some(location) = response.headers().get("location") {
                     if let Ok(loc_str) = location.to_str() {
-                        url = loc_str.to_string();
-                        log::info!("Apple auth redirect -> {}", url);
-                        continue;
+                        if let Some(redirect_url) =
+                            Self::resolve_redirect_url(&url, loc_str, &self.guid)
+                        {
+                            url = redirect_url;
+                            log::info!("Apple auth redirect -> {}", url);
+                            continue;
+                        }
                     }
                 }
+
+                let mut redirect_failure = HashMap::new();
+                redirect_failure.insert("_state".to_string(), Value::String("failure".to_string()));
+                redirect_failure.insert(
+                    "failureType".to_string(),
+                    Value::String("RedirectError".to_string()),
+                );
+                redirect_failure.insert(
+                    "customerMessage".to_string(),
+                    Value::String("Apple 登录重定向异常，请重新开始登录流程".to_string()),
+                );
+                return Ok(redirect_failure);
             }
 
             let body_text = response.text().await.unwrap_or_default();
@@ -364,7 +422,14 @@ impl Store {
         let has_success = result.contains_key("dsPersonId") || result.contains_key("passwordToken");
 
         if has_success {
+            let (display_name, account_email) = extract_account_metadata(&result);
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
+            if let Some(display_name) = display_name {
+                final_result.insert("displayName".to_string(), Value::String(display_name));
+            }
+            if let Some(account_email) = account_email {
+                final_result.insert("email".to_string(), Value::String(account_email));
+            }
             log::info!("Apple auth SUCCESS for {}", email);
         } else {
             final_result.insert("_state".to_string(), Value::String("failure".to_string()));
