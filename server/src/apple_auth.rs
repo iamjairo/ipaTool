@@ -124,39 +124,6 @@ impl Store {
         headers
     }
 
-    /// Encode login parameters as XML plist body (as Apple expects)
-    fn encode_plist_body(
-        email: &str,
-        password: &str,
-        mfa: Option<&str>,
-        guid: &str,
-        attempt: u32,
-    ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-        let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(" ", ""));
-
-        let mut params = HashMap::new();
-        params.insert("appleId".to_string(), Value::String(email.to_string()));
-        params.insert("attempt".to_string(), Value::Number(serde_json::Number::from(attempt)));
-        params.insert("guid".to_string(), Value::String(guid.to_string()));
-        params.insert("password".to_string(), Value::String(combined_password));
-        params.insert("rmp".to_string(), Value::String("0".to_string()));
-        params.insert("why".to_string(), Value::String("signIn".to_string()));
-
-        // Convert serde_json::Value map to plist-friendly structure
-        let plist_dict: HashMap<String, plist::Value> = params.into_iter().map(|(k, v)| {
-            let pv = match v {
-                Value::String(s) => plist::Value::String(s),
-                Value::Number(n) => plist::Value::Integer(plist::Integer::from(n.as_u64().unwrap_or(0) as i64)),
-                _ => plist::Value::String(v.to_string()),
-            };
-            (k, pv)
-        }).collect();
-
-        let mut buf = Vec::new();
-        plist::to_writer_xml(&mut buf, &plist_dict)?;
-        Ok(buf)
-    }
-
     pub async fn authenticate(
         &self,
         email: &str,
@@ -170,18 +137,26 @@ impl Store {
         // Apple login flow: retry up to 4 attempts with 302 redirect handling
         // (matches ipatool reference implementation)
         for attempt in 1..=4u32 {
-            let body = Self::encode_plist_body(email, password, mfa, &self.guid, attempt)?;
+            let combined_password = format!("{}{}", password, mfa.unwrap_or("").replace(" ", ""));
+
+            let mut auth_data = HashMap::new();
+            auth_data.insert("appleId", email.to_string());
+            auth_data.insert("attempt", attempt.to_string());
+            auth_data.insert("guid", self.guid.clone());
+            auth_data.insert("password", combined_password);
+            auth_data.insert("rmp", "0".to_string());
+            auth_data.insert("why", "signIn".to_string());
 
             log::info!(
-                "Apple auth attempt {}: url={}, body_len={}",
-                attempt, url, body.len()
+                "Apple auth attempt {}: url={}, has_mfa={}",
+                attempt, url, mfa.is_some()
             );
 
             let response = self
                 .client
                 .post(&url)
                 .headers(Self::get_headers())
-                .body(body)
+                .form(&auth_data)
                 .send()
                 .await?;
 
@@ -225,7 +200,6 @@ impl Store {
             };
 
             let failure_type = result.get("failureType").and_then(|v| v.as_str()).unwrap_or("");
-            let _customer_msg = result.get("customerMessage").and_then(|v| v.as_str()).unwrap_or("");
 
             // Check for -5000 (InvalidCredentials) on attempt 1 → auto retry
             if attempt == 1 && failure_type == "-5000" {
