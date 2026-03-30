@@ -772,7 +772,7 @@ const loadAccounts = async () => {
   
   // 从服务器获取最新的账号列表
   try {
-    const response = await fetch(`${API_BASE}/accounts`)
+    const response = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
     const data = await response.json()
     
     if (data.ok && data.data) {
@@ -780,17 +780,67 @@ const loadAccounts = async () => {
         token: acc.token,
         email: acc.email,
         dsid: acc.dsid,
-        region: acc.region || 'US'
+        region: acc.region || 'US',
+        hasSavedCredentials: !!acc.hasSavedCredentials,
       }))
       // 更新本地存储
       localStorage.setItem('ipa_accounts', JSON.stringify(accounts.value))
       
       // 自动选择第一个账号
       autoSelectFirstAccount()
+    } else if (data.ok && (!data.data || data.data.length === 0)) {
+      // 服务端无已登录账号，尝试用保存的凭证自动恢复
+      try {
+        const autoRes = await fetch(`${API_BASE}/auto-login`, { method: 'POST', credentials: 'include' })
+        const autoData = await autoRes.json()
+        if (autoData.ok && autoData.data?.succeeded?.length > 0) {
+          // 自动登录成功，重新加载账号列表
+          const retryRes = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
+          const retryData = await retryRes.json()
+          if (retryData.ok && retryData.data) {
+            accounts.value = retryData.data.map(acc => ({
+              token: acc.token,
+              email: acc.email,
+              dsid: acc.dsid,
+              region: acc.region || 'US',
+              hasSavedCredentials: !!acc.hasSavedCredentials,
+            }))
+            localStorage.setItem('ipa_accounts', JSON.stringify(accounts.value))
+            autoSelectFirstAccount()
+          }
+        }
+      } catch (e) {
+        console.warn('Auto-login restore failed:', e)
+      }
     }
   } catch (error) {
     console.error('Failed to load accounts from server:', error)
   }
+}
+
+const resolveActiveAccount = async () => {
+  if (!selectedAccount.value && selectedAccount.value !== 0) {
+    throw new Error('请选择登录账号')
+  }
+
+  const currentAccount = accounts.value[selectedAccount.value]
+  if (!currentAccount) {
+    throw new Error('当前账号不存在，请重新选择账号')
+  }
+
+  const targetEmail = currentAccount.email
+  await loadAccounts()
+
+  const freshIndex = accounts.value.findIndex(
+    acc => acc.token === currentAccount.token || acc.email === targetEmail
+  )
+
+  if (freshIndex < 0) {
+    throw new Error('当前账号会话已失效，请到账号管理页重新登录')
+  }
+
+  selectedAccount.value = freshIndex
+  return accounts.value[freshIndex]
 }
 
 const addLog = (message) => {
@@ -929,7 +979,7 @@ const fetchVersions = async () => {
   addLog(`[查询] 正在查询 APPID=${appid.value} 的历史版本（区域：${getRegionLabel(region)}）...`)
 
   try {
-    const response = await fetch(`${API_BASE}/versions?appid=${encodeURIComponent(appid.value)}&region=${encodeURIComponent(region)}`)
+    const response = await fetch(`${API_BASE}/versions?appid=${encodeURIComponent(appid.value)}&region=${encodeURIComponent(region)}`, { credentials: 'include' })
     const data = await response.json()
 
     if (!data.ok) {
@@ -963,13 +1013,13 @@ const directLinkDownload = async (autoPurchase = false) => {
     return
   }
 
-  const account = accounts.value[selectedAccount.value]
-  addLog('[直链] 获取直链中…')
-
   try {
+    const account = await resolveActiveAccount()
+    addLog('[直链] 获取直链中…')
     const url = `${API_BASE}/download-url?token=${encodeURIComponent(account.token)}&appid=${encodeURIComponent(appid.value)}${appVerId.value ? `&appVerId=${encodeURIComponent(appVerId.value)}` : ''}${autoPurchase ? '&autoPurchase=true' : ''}`
-    const response = await fetch(url)
+    const response = await fetch(url, { credentials: 'include' })
     const data = await response.json()
+    const payload = data?.data || data
 
     if (!data.ok) {
       if (data.needsPurchase && !autoPurchase) {
@@ -996,13 +1046,13 @@ const directLinkDownload = async (autoPurchase = false) => {
       return
     }
 
-    addLog(`[直链] 成功：文件名=${data.fileName}，即将从 Apple CDN 直连下载`)
-    addLog(`[直链] URL（部分）=${String(data.url).slice(0, 80)}...`)
+    addLog(`[直链] 成功：文件名=${payload.fileName}，即将从 Apple CDN 直连下载`)
+    addLog(`[直链] URL（部分）=${String(payload.url).slice(0, 80)}...`)
 
     // Trigger browser download
     const a = document.createElement('a')
-    a.href = data.url
-    a.download = data.fileName || ''
+    a.href = payload.url
+    a.download = payload.fileName || ''
     a.rel = 'noopener'
     document.body.appendChild(a)
     a.click()
@@ -1023,26 +1073,28 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     return
   }
 
-  const account = accounts.value[selectedAccount.value]
-  
-  // Reset progress
-  showProgress.value = true
-  progressPercent.value = 0
-  progressStage.value = '准备中…'
-  logs.value = ''
-  addLog('[进度] 创建下载任务…')
-
   try {
+    const account = await resolveActiveAccount()
+
+    // Reset progress
+    showProgress.value = true
+    progressPercent.value = 0
+    progressStage.value = '准备中…'
+    logs.value = ''
+    addLog('[进度] 创建下载任务…')
+
+    addLog(`[进度] 使用账号 ${account.email} 发起任务，token=${String(account.token).slice(0, 8)}…`)
     const response = await fetch(`${API_BASE}/start-download-direct`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
         token: account.token,
         appid: appid.value,
-        appVerId: appVerId.value || undefined,
-        autoPurchase
+        appVerId: appVerId.value ? String(appVerId.value) : undefined,
+        autoPurchase: !!autoPurchase
       })
     })
     const data = await response.json()
@@ -1076,10 +1128,15 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     const { jobId } = data
     addLog(`[进度] 任务已创建：${jobId}`)
 
-    // 添加到队列
+    // 添加到队列 — 把 selectedApp 的图标/名称/开发者展平到顶层，供 DownloadQueue 直接渲染
+    const app = props.selectedApp || {}
     const queueItem = {
       id: jobId,
-      app: props.selectedApp || { trackName: appid.value, artworkUrl100: '', artworkUrl60: '' },
+      appName: app.trackName || appid.value,
+      artworkUrl: app.artworkUrl100 || app.artworkUrl60 || '',
+      artistName: app.artistName || '',
+      version: app.version || '',
+      app: app,
       account: account,
       status: 'downloading',
       progress: 0,
@@ -1088,7 +1145,7 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     }
     emit('download-started', queueItem)
 
-    // Connect to SSE
+    // Connect to SSE / fallback polling
     connectToSSE(jobId, queueItem)
   } catch (error) {
     ElMessage.error(`创建任务失败：${error.message}`)
@@ -1096,8 +1153,83 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
   }
 }
 
+const pollJobStatus = (jobId, queueItem) => {
+  addLog('[进度] SSE 不可用，自动切换为轮询模式')
+
+  const timer = setInterval(async () => {
+    try {
+      const response = await fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`, { credentials: 'include' })
+      const data = await response.json()
+      if (!data.ok || !data.data) return
+
+      const snapshot = data.data
+      if (snapshot.progress != null) {
+        progressPercent.value = snapshot.progress
+        const appStore = useAppStore()
+        appStore.updateQueueItem(jobId, { progress: snapshot.progress })
+      }
+      if (snapshot.stage) {
+        progressStage.value = snapshot.stage
+        const appStore = useAppStore()
+        appStore.updateQueueItem(jobId, { stage: snapshot.stage })
+      }
+      if (snapshot.error) {
+        addLog(`[错误] ${snapshot.error}`)
+      }
+
+      if (snapshot.status === 'ready') {
+        clearInterval(timer)
+        const a = document.createElement('a')
+        a.href = new URL(`${API_BASE}/download-file?jobId=${encodeURIComponent(jobId)}`, window.location.origin).toString()
+        a.rel = 'noopener'
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+
+        progressPercent.value = 100
+        progressStage.value = '已开始下载'
+        addLog('[进度] 文件下载已开始')
+
+        const appStore = useAppStore()
+        appStore.updateQueueItem(jobId, {
+          status: 'completed',
+          progress: 100
+        })
+
+        if (snapshot.installUrl) {
+          downloadInstallUrl.value = snapshot.installUrl
+          showInstallButton.value = true
+        }
+      } else if (snapshot.status === 'failed') {
+        clearInterval(timer)
+        addLog(`[失败] ${snapshot.error || '任务失败'}`)
+        if (queueItem) {
+          queueItem.status = 'error'
+          queueItem.error = snapshot.error || '任务失败'
+        }
+      }
+    } catch (error) {
+      clearInterval(timer)
+      addLog(`[错误] 轮询任务状态失败：${error.message}`)
+      if (queueItem) {
+        queueItem.status = 'error'
+        queueItem.error = error.message
+      }
+    }
+  }, 1500)
+}
+
 const connectToSSE = (jobId, queueItem) => {
-  const es = new EventSource(`${API_BASE}/progress-sse?jobId=${encodeURIComponent(jobId)}`)
+  let es
+  try {
+    const origin = window.location.origin || `${window.location.protocol}//${window.location.host}`
+    const sseUrl = new URL(`${API_BASE}/progress-sse?jobId=${encodeURIComponent(jobId)}`, origin).toString()
+    es = new EventSource(sseUrl)
+  } catch (error) {
+    addLog(`[进度] SSE 初始化失败：${error.message}`)
+    pollJobStatus(jobId, queueItem)
+    return
+  }
 
   es.addEventListener('progress', (ev) => {
     try {
@@ -1139,7 +1271,7 @@ const connectToSSE = (jobId, queueItem) => {
       if (data.status === 'ready') {
         progressStage.value = '准备下载文件…'
         const a = document.createElement('a')
-        a.href = `${API_BASE}/download-file?jobId=${encodeURIComponent(jobId)}`
+        a.href = new URL(`${API_BASE}/download-file?jobId=${encodeURIComponent(jobId)}`, window.location.origin).toString()
         a.rel = 'noopener'
         document.body.appendChild(a)
         a.click()
@@ -1181,7 +1313,7 @@ const connectToSSE = (jobId, queueItem) => {
         const appName = props.selectedApp?.trackName || appid.value
         notifications.notifyDownloadComplete(appName)
         // 获取任务信息，包括安装URL
-        fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`)
+        fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`, { credentials: 'include' })
           .then(res => res.json())
           .then(jobData => {
             if (jobData.ok && jobData.data?.installUrl) {
@@ -1209,12 +1341,9 @@ const connectToSSE = (jobId, queueItem) => {
   })
 
   es.onerror = () => {
-    addLog('[错误] SSE 连接断开')
-    if (queueItem) {
-      queueItem.status = 'error'
-      queueItem.error = 'SSE 连接断开'
-    }
+    addLog('[错误] SSE 连接断开，切换为轮询模式')
     es.close()
+    pollJobStatus(jobId, queueItem)
   }
 }
 

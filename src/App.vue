@@ -139,6 +139,9 @@
               target="_blank"
             >GitHub</a>
           </p>
+          <p class="mt-2 text-[11px] text-gray-400 dark:text-gray-500 font-mono">
+            版本：v{{ appVersion }} · build {{ buildId }}
+          </p>
         </div>
       </footer>
     </template>
@@ -147,6 +150,8 @@
 
 <script setup>
 import { onMounted, onUnmounted, watch, ref } from 'vue'
+
+/* global __APP_VERSION__, __APP_BUILD_ID__ */
 import { useDark } from './composables/useDark'
 import { useAppStore } from './stores/app'
 import { useNotifications } from './composables/useNotifications'
@@ -160,6 +165,8 @@ const notifications = useNotifications()
 
 const authState = ref('loading')
 const API_BASE = '/api'
+const appVersion = __APP_VERSION__
+const buildId = __APP_BUILD_ID__
 
 async function checkAuth() {
   try {

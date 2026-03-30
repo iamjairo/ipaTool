@@ -62,14 +62,28 @@ impl SignatureClient {
 
         let signature = song_list_0["sinfs"]
             .as_array()
-            .and_then(|sinfs| sinfs.iter().find(|s| s["id"].as_i64() == Some(0)))
+            .and_then(|sinfs| {
+                sinfs.iter().find(|s| {
+                    let id = &s["id"];
+                    id.as_i64() == Some(0)
+                        || id.as_str() == Some("0")
+                        || id.as_u64() == Some(0)
+                })
+            })
             .map(|s| Sinf {
                 id: 0,
                 sinf: s["sinf"].as_str().unwrap_or("").to_string(),
             });
 
         if signature.is_none() {
-            return Err("Invalid signature".into());
+            eprintln!(
+                "[signature] WARNING: no sinf (id=0) found in Apple response; keys={}, sinfs={:?}",
+                song_list_0
+                    .as_object()
+                    .map(|o| o.keys().cloned().collect::<Vec<_>>().join(","))
+                    .unwrap_or_default(),
+                song_list_0["sinfs"]
+            );
         }
 
         Ok(SignatureClient {
@@ -159,7 +173,10 @@ impl SignatureClient {
     ) -> Result<&mut Self, Box<dyn std::error::Error + Send + Sync>> {
         let signature = match &self.signature {
             Some(s) => s,
-            None => return Err("Invalid signature".into()),
+            None => {
+                eprintln!("[signature] Skipping sinf injection: no signature available for this app");
+                return Ok(self);
+            }
         };
 
         let reader = std::io::Cursor::new(self.archive.clone());

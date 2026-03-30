@@ -70,7 +70,8 @@
               circle
               size="small"
               class="refresh-button"
-              title="刷新会话"
+              :title="account.hasSavedCredentials ? '刷新会话' : '未保存密码，无法自动刷新'"
+              :disabled="!account.hasSavedCredentials"
               :loading="refreshingIndex === index"
               @click="refreshAccount(index)"
             />
@@ -271,7 +272,7 @@ const API_BASE = '/api'
 // 加载保存的凭证列表（仅邮箱）
 const loadSavedCredentials = async () => {
 	try {
-		const response = await fetch(`${API_BASE}/credentials`)
+		const response = await fetch(`${API_BASE}/credentials`, { credentials: 'include' })
 		const data = await response.json()
 
 		if (data.ok && data.data) {
@@ -295,18 +296,41 @@ const loadAccounts = async () => {
 
 	// 然后从服务器获取最新的已登录账号列表
 	try {
-		const response = await fetch(`${API_BASE}/accounts`)
+		const response = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
 		const data = await response.json()
 
-		if (data.ok && data.data) {
+		if (data.ok && data.data && data.data.length > 0) {
 			// 同步服务器账号列表到本地
 			accounts.value = data.data.map((acc) => ({
 				token: acc.token,
 				email: acc.email,
 				dsid: acc.dsid,
 				region: acc.region || 'US',
+				hasSavedCredentials: !!acc.hasSavedCredentials,
 			}))
 			saveAccounts()
+		} else if (data.ok && (!data.data || data.data.length === 0)) {
+			// 服务端无已登录账号，尝试用保存的凭证自动恢复
+			try {
+				const autoRes = await fetch(`${API_BASE}/auto-login`, { credentials: 'include', method: 'POST' })
+				const autoData = await autoRes.json()
+				if (autoData.ok && autoData.data?.succeeded?.length > 0) {
+					const retryRes = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
+					const retryData = await retryRes.json()
+					if (retryData.ok && retryData.data) {
+						accounts.value = retryData.data.map((acc) => ({
+							token: acc.token,
+							email: acc.email,
+							dsid: acc.dsid,
+							region: acc.region || 'US',
+							hasSavedCredentials: !!acc.hasSavedCredentials,
+						}))
+						saveAccounts()
+					}
+				}
+			} catch (e) {
+				console.warn('Auto-login restore failed:', e)
+			}
 		}
 	} catch (error) {
 		console.error('Failed to load accounts from server:', error)
@@ -337,6 +361,7 @@ const loginAccount = async () => {
 
 	try {
 		const response = await fetch(`${API_BASE}/login`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -397,6 +422,7 @@ const loginAccount = async () => {
 			email: data.data.email,
 			dsid: data.data.dsid,
 			region: data.data.region || 'US',
+			hasSavedCredentials: !!savePassword.value,
 		})
 
 		// 更新保存的凭证列表
@@ -422,6 +448,7 @@ const removeAccount = async (index) => {
 		// 从服务器删除账号（会同时删除保存的凭证）
 		try {
 			const response = await fetch(`${API_BASE}/accounts/${account.token}`, {
+				credentials: 'include',
 				method: 'DELETE',
 			})
 
@@ -445,10 +472,16 @@ const refreshAccount = async (index) => {
 	const account = accounts.value[index]
 	if (!account) return
 
+	if (!account.hasSavedCredentials) {
+		ElMessage.warning('这个账号没有保存密码，无法自动刷新。请重新登录并勾选“保存密码”。')
+		return
+	}
+
 	refreshingIndex.value = index
 
 	try {
 		const response = await fetch(`${API_BASE}/login/refresh`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json'
@@ -459,11 +492,17 @@ const refreshAccount = async (index) => {
 		const data = await response.json()
 
 		if (data.ok) {
-			ElMessage.warning('账号会话已刷新')
+			ElMessage.success('账号会话已刷新')
 			// 刷新账号列表以获取最新信息
-			await fetchAccounts()
+			await loadSavedCredentials()
+			await loadAccounts()
 		} else {
-			ElMessage.error(`刷新失败: ${data.error}`)
+			const errMsg = data.error || '刷新失败'
+			if (errMsg.includes('未找到保存的密码')) {
+				ElMessage.error('刷新失败：这个账号没有保存密码。请重新登录并勾选“保存密码”。')
+			} else {
+				ElMessage.error(`刷新失败: ${errMsg}`)
+			}
 		}
 	} catch (error) {
 		console.error('Failed to refresh account:', error)
@@ -481,6 +520,7 @@ const autoLoginAll = async () => {
 
 	try {
 		const response = await fetch(`${API_BASE}/auto-login`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -499,6 +539,7 @@ const autoLoginAll = async () => {
 						token: result.token,
 						email: result.email,
 						dsid: result.dsid,
+						hasSavedCredentials: true,
 					})
 				}
 			})

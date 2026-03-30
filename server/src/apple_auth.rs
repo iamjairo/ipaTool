@@ -218,6 +218,18 @@ impl Store {
         headers
     }
 
+    fn apple_plist_headers() -> header::HeaderMap {
+        let mut headers = Self::base_headers();
+        headers.insert("Content-Type", "application/x-apple-plist".parse().unwrap());
+        headers.insert(
+            header::ACCEPT,
+            "application/x-apple-plist, text/xml, application/xml, */*"
+                .parse()
+                .unwrap(),
+        );
+        headers
+    }
+
     fn ensure_guid_query(endpoint: &str, guid: &str) -> String {
         if endpoint.contains("guid=") {
             return endpoint.to_string();
@@ -458,16 +470,33 @@ impl Store {
             self.guid
         );
 
-        let mut purchase_data = HashMap::new();
-        purchase_data.insert("guid", Value::String(self.guid.clone()));
-        purchase_data.insert("salableAdamId", Value::String(app_identifier.to_string()));
+        let mut purchase_data = vec![
+            ("appExtVrsId", "0".to_string()),
+            ("hasAskedToFulfillPreorder", "true".to_string()),
+            ("buyWithoutAuthorization", "true".to_string()),
+            ("hasDoneAgeCheck", "true".to_string()),
+            ("guid", self.guid.clone()),
+            ("needDiv", "0".to_string()),
+            ("origPage", format!("Software-{}", app_identifier)),
+            ("origPageLocation", "Buy".to_string()),
+            ("price", "0".to_string()),
+            ("pricingParameters", "STDQ".to_string()),
+            ("productType", "C".to_string()),
+            ("salableAdamId", app_identifier.to_string()),
+        ];
         if let Some(ver_id) = app_ver_id {
-            purchase_data.insert("externalVersionId", Value::String(ver_id.to_string()));
-            purchase_data.insert("appExtVrsId", Value::String(ver_id.to_string()));
+            for (k, v) in purchase_data.iter_mut() {
+                if *k == "appExtVrsId" {
+                    *v = ver_id.to_string();
+                }
+            }
+            purchase_data.push(("externalVersionId", ver_id.to_string()));
         }
-        purchase_data.insert("pricingParameters", Value::String("STDQ".to_string()));
 
-        let mut headers = Self::form_headers();
+        let purchase_body = build_xml_plist_body(&purchase_data)
+            .map_err(|e| format!("failed to build purchase plist body: {}", e))?;
+
+        let mut headers = Self::apple_plist_headers();
         if let Some(ds_id) = &auth_info.ds_person_id {
             headers.insert("X-Dsid", ds_id.parse().unwrap());
             headers.insert("iCloud-DSID", ds_id.parse().unwrap());
@@ -480,12 +509,22 @@ impl Store {
             .client
             .post(&url)
             .headers(headers)
-            .form(&purchase_data)
+            .body(purchase_body)
             .send()
             .await?;
 
-        let mut result: HashMap<String, Value> = response.json().await?;
-        result.insert("_state".to_string(), Value::String("success".to_string()));
+        let body_text = response.text().await?;
+        let mut result = parse_apple_plist_response(&body_text)
+            .map_err(|e| format!("failed to parse purchase response: {}", e))?;
+        let has_failure = result
+            .get("failureType")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        result.insert(
+            "_state".to_string(),
+            Value::String(if has_failure { "failure" } else { "success" }.to_string()),
+        );
         Ok(result)
     }
 
@@ -500,15 +539,19 @@ impl Store {
             self.guid
         );
 
-        let mut download_data = HashMap::new();
-        download_data.insert("creditDisplay", Value::String("".to_string()));
-        download_data.insert("guid", Value::String(self.guid.clone()));
-        download_data.insert("salableAdamId", Value::String(app_identifier.to_string()));
+        let mut download_data = vec![
+            ("creditDisplay", "".to_string()),
+            ("guid", self.guid.clone()),
+            ("salableAdamId", app_identifier.to_string()),
+        ];
         if let Some(ver_id) = app_ver_id {
-            download_data.insert("externalVersionId", Value::String(ver_id.to_string()));
+            download_data.push(("externalVersionId", ver_id.to_string()));
         }
 
-        let mut headers = Self::form_headers();
+        let download_body = build_xml_plist_body(&download_data)
+            .map_err(|e| format!("failed to build download plist body: {}", e))?;
+
+        let mut headers = Self::apple_plist_headers();
         if let Some(ds_id) = &auth_info.ds_person_id {
             headers.insert("X-Dsid", ds_id.parse().unwrap());
             headers.insert("iCloud-DSID", ds_id.parse().unwrap());
@@ -521,12 +564,34 @@ impl Store {
             .client
             .post(&url)
             .headers(headers)
-            .form(&download_data)
+            .body(download_body)
             .send()
             .await?;
 
-        let mut result: HashMap<String, Value> = response.json().await?;
-        result.insert("_state".to_string(), Value::String("success".to_string()));
+        let body_text = response.text().await?;
+        let mut result = parse_apple_plist_response(&body_text)
+            .map_err(|e| format!("failed to parse download response: {}", e))?;
+        let has_failure = result
+            .get("failureType")
+            .and_then(|v| v.as_str())
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        let has_song_list = result
+            .get("songList")
+            .and_then(|v| v.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+        result.insert(
+            "_state".to_string(),
+            Value::String(
+                if has_failure || !has_song_list {
+                    "failure"
+                } else {
+                    "success"
+                }
+                .to_string(),
+            ),
+        );
         Ok(result)
     }
 }

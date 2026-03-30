@@ -276,7 +276,7 @@ const updateCount = computed(() => updates.value.length)
 // 加载订阅列表
 const loadSubscriptions = async () => {
   try {
-    const response = await fetch(`${API_BASE}/subscriptions`)
+    const response = await fetch(`${API_BASE}/subscriptions`, { credentials: 'include' })
     const data = await response.json()
     if (data.ok) {
       subscriptions.value = data.data || []
@@ -291,7 +291,7 @@ const loadSubscriptions = async () => {
 const checkUpdates = async () => {
   checking.value = true
   try {
-    const response = await fetch(`${API_BASE}/check-updates`)
+    const response = await fetch(`${API_BASE}/check-updates`, { credentials: 'include' })
     const data = await response.json()
 
     if (data.ok) {
@@ -330,6 +330,7 @@ const addSubscription = async () => {
   subscribing.value = true
   try {
     const response = await fetch(`${API_BASE}/subscriptions`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(subscribeForm.value)
@@ -367,6 +368,7 @@ const removeSubscription = async (sub) => {
     })
 
     const response = await fetch(`${API_BASE}/subscriptions?app_id=${sub.app_id}&account_email=${sub.account_email}`, {
+      credentials: 'include',
       method: 'DELETE'
     })
     const data = await response.json()

@@ -451,11 +451,26 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         downloaded: None,
     });
 
-    let mut sig_client = SignatureClient::new(song_list_value, params.email)?;
-    sig_client.load_file(&output_file_path.to_string_lossy())?;
-    sig_client.append_metadata();
-    sig_client.append_signature()?;
-    sig_client.write()?;
+    // Signing is best-effort: Apple doesn't always return sinfs (e.g. free apps).
+    // If signing fails, still deliver the unsigned IPA.
+    match SignatureClient::new(song_list_value, params.email) {
+        Ok(mut sig_client) => {
+            if let Err(e) = sig_client.load_file(&output_file_path.to_string_lossy()) {
+                eprintln!("[sign] Failed to load IPA for signing: {}", e);
+            } else {
+                sig_client.append_metadata();
+                if let Err(e) = sig_client.append_signature() {
+                    eprintln!("[sign] Failed to append signature: {}", e);
+                }
+                if let Err(e) = sig_client.write() {
+                    eprintln!("[sign] Failed to write signed IPA: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("[sign] Skipping signing ({}). IPA will be delivered unsigned.", e);
+        }
+    }
 
     fs::remove_dir_all(&cache_dir).await?;
 

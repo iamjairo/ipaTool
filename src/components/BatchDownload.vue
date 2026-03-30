@@ -327,7 +327,7 @@ const draftItems = computed(() => appStore.batchDraftItems)
 // 加载批量任务
 const loadTasks = async () => {
   try {
-    const response = await fetch(`${API_BASE}/batch-tasks`)
+    const response = await fetch(`${API_BASE}/batch-tasks`, { credentials: 'include' })
     const data = await response.json()
     if (data.ok) {
       tasks.value = data.data || []
@@ -361,6 +361,7 @@ const createBatchTask = async () => {
   creating.value = true
   try {
     const response = await fetch(`${API_BASE}/batch-download`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -396,7 +397,7 @@ const createBatchTask = async () => {
 const viewDetails = async (task) => {
   currentTask.value = task
   try {
-    const response = await fetch(`${API_BASE}/batch-tasks/${task.id}`)
+    const response = await fetch(`${API_BASE}/batch-tasks/${task.id}`, { credentials: 'include' })
     const data = await response.json()
     if (data.ok && data.data.items) {
       taskItems.value = data.data.items
@@ -416,6 +417,7 @@ const deleteTask = async (id) => {
     })
 
     const response = await fetch(`${API_BASE}/batch-tasks/${id}`, {
+      credentials: 'include',
       method: 'DELETE'
     })
     const data = await response.json()

@@ -20,6 +20,7 @@ use ipa_webtool_services::{
     JobEndEvent, JobEvent, JobLogEvent, JobProgressEvent, JobProgressPayload, JobState, JobStore,
     NewSubscription,
 };
+use ipa_webtool_services::DownloadRecord;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -106,6 +107,7 @@ struct JobIdQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AppleLoginRequest {
     email: String,
     password: String,
@@ -560,15 +562,35 @@ fn snapshot_progress_event(snapshot: &JobState) -> JobProgressEvent {
 }
 
 async fn start_download_direct(
-    req: web::Json<StartDownloadDirectRequest>,
+    body: web::Bytes,
     data: web::Data<AppState>,
 ) -> impl Responder {
+    let req: StartDownloadDirectRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[start-download-direct] JSON parse error: {}", e);
+            eprintln!("[start-download-direct] raw body: {}", String::from_utf8_lossy(&body));
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!("请求解析失败: {}", e)));
+        }
+    };
     let accounts = ACCOUNTS.read().await;
+    eprintln!(
+        "[start-download-direct] token={}… appid={} appVerId={:?} autoPurchase={} active_accounts={}",
+        req.token.chars().take(8).collect::<String>(),
+        req.appid,
+        req.appVerId,
+        req.autoPurchase,
+        accounts.len()
+    );
     let account_store = match accounts.get(&req.token) {
         Some(account) => account.clone(),
         None => {
+            eprintln!(
+                "[start-download-direct] token miss: {}…",
+                req.token.chars().take(8).collect::<String>()
+            );
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("无效的 token".to_string()))
+                .json(ApiResponse::<String>::error("无效的 token".to_string()));
         }
     };
     drop(accounts);
@@ -619,6 +641,7 @@ async fn start_download_direct(
     }
 
     let job_id = Uuid::new_v4().to_string();
+    eprintln!("[start-download-direct] job created: {}", job_id);
     let job = data.job_store.create_job(job_id.clone()).await;
     job.append_log(format!("[job] 已创建任务 {}", job_id)).await;
 
@@ -628,6 +651,7 @@ async fn start_download_direct(
     let account_email = account_store.account_email.clone();
     let job_for_task = job.clone();
     let job_id_for_task = job_id.clone();
+    let db = data.db.clone();
 
     tokio::spawn(async move {
         let job_dir = format!("../downloads/jobs/{}", job_id_for_task);
@@ -673,8 +697,33 @@ async fn start_download_direct(
                         .append_log(format!("[ready] 文件已就绪：{}", file_path))
                         .await;
                     job_for_task
-                        .mark_ready(file_path, result.metadata, None)
+                        .mark_ready(file_path.clone(), result.metadata.clone(), None)
                         .await;
+
+                    // 写入下载记录
+                    if let Some(meta) = &result.metadata {
+                        let record = DownloadRecord {
+                            id: None,
+                            app_name: meta.bundle_display_name.clone(),
+                            app_id: appid.clone(),
+                            bundle_id: Some(meta.bundle_id.clone()),
+                            version: Some(meta.bundle_short_version_string.clone()),
+                            account_email: account_email.clone(),
+                            account_region: None,
+                            download_date: None,
+                            status: "completed".to_string(),
+                            file_size: None,
+                            install_url: None,
+                            artwork_url: Some(meta.artwork_url.clone()),
+                            artist_name: Some(meta.artist_name.clone()),
+                            progress: Some(100),
+                            error: None,
+                            created_at: None,
+                        };
+                        if let Err(e) = db.lock().unwrap().add_download_record(&record) {
+                            eprintln!("[record] Failed to save download record: {}", e);
+                        }
+                    }
                 } else {
                     let message = "下载完成，但未找到产物文件".to_string();
                     job_for_task
@@ -831,9 +880,20 @@ async fn get_job_info(
 // 获取下载链接
 async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder {
     let accounts = ACCOUNTS.read().await;
+    eprintln!(
+        "[download-url] token={}… appid={} appVerId={:?} active_accounts={}",
+        query.token.chars().take(8).collect::<String>(),
+        query.appid,
+        query.appVerId,
+        accounts.len()
+    );
     let account_store = accounts.get(&query.token);
 
     if account_store.is_none() {
+        eprintln!(
+            "[download-url] token miss: {}…",
+            query.token.chars().take(8).collect::<String>()
+        );
         return HttpResponse::Unauthorized()
             .json(ApiResponse::<String>::error("无效的 token".to_string()));
     }
@@ -877,8 +937,13 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
                     }
                 }
 
-                HttpResponse::BadRequest()
-                    .json(ApiResponse::<String>::error("无法获取下载链接".to_string()))
+                let error_msg = result
+                    .get("customerMessage")
+                    .or(result.get("failureType"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("无法获取下载链接");
+
+                HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
             } else {
                 // 检查是否需要购买
                 let error_msg = result
@@ -1289,6 +1354,16 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
     let accounts = ACCOUNTS.read().await;
     let mut list: Vec<serde_json::Value> = Vec::new();
 
+    let saved_credential_emails: std::collections::HashSet<String> = if let Ok(db) = data.db.lock()
+    {
+        match db.get_all_credentials() {
+            Ok(creds) => creds.into_iter().map(|c| c.email).collect(),
+            Err(_) => std::collections::HashSet::new(),
+        }
+    } else {
+        std::collections::HashSet::new()
+    };
+
     for (token, store) in accounts.iter() {
         let dsid = store
             .auth_info
@@ -1304,6 +1379,7 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
             .auth_info
             .as_ref()
             .and_then(|ai| ai.display_name.clone());
+        let has_saved_credentials = saved_credential_emails.contains(&email);
 
         list.push(serde_json::json!({
             "token": token,
@@ -1311,26 +1387,13 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
             "dsid": dsid,
             "region": "US",
             "displayName": display_name,
+            "hasSavedCredentials": has_saved_credentials,
         }));
     }
 
-    // 补充 DB 中有但内存中没有的账号（服务重启后恢复）
-    if let Ok(db) = data.db.lock() {
-        if let Ok(db_accounts) = db.get_all_accounts() {
-            let tokens_set: std::collections::HashSet<_> = accounts.keys().cloned().collect();
-            for acc in db_accounts {
-                if !tokens_set.contains(&acc.token) {
-                    list.push(serde_json::json!({
-                        "token": acc.token,
-                        "email": acc.email,
-                        "dsid": "",
-                        "region": acc.region,
-                    }));
-                }
-            }
-        }
-    }
-
+    // 这里只返回当前内存中仍然有效的登录会话。
+    // DB 中残留但尚未恢复到 ACCOUNTS 的记录不应伪装成“已登录账号”，
+    // 否则前端会拿着陈旧 token 去做下载/刷新，得到“无效的 token”。
     HttpResponse::Ok().json(ApiResponse::success(list))
 }
 
@@ -2077,6 +2140,41 @@ async fn delete_download_record(path: web::Path<i64>, data: web::Data<AppState>)
     }
 }
 
+// 清理服务器上的下载文件
+async fn cleanup_downloads() -> impl Responder {
+    let jobs_dir = std::path::Path::new("../downloads/jobs");
+    let mut cleaned = 0i64;
+    let mut freed_bytes = 0u64;
+
+    if let Ok(mut entries) = tokio::fs::read_dir(jobs_dir).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(mut dir_entries) = tokio::fs::read_dir(&path).await {
+                    while let Ok(Some(f)) = dir_entries.next_entry().await {
+                        if f.path().extension().map(|e| e == "ipa").unwrap_or(false) {
+                            if let Ok(meta) = f.metadata().await {
+                                freed_bytes += meta.len();
+                            }
+                        }
+                    }
+                }
+                if let Err(e) = tokio::fs::remove_dir_all(&path).await {
+                    eprintln!("[cleanup] Failed to remove {:?}: {}", path, e);
+                } else {
+                    cleaned += 1;
+                }
+            }
+        }
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "cleaned": cleaned,
+        "freed_bytes": freed_bytes,
+        "freed_mb": (freed_bytes as f64 / 1024.0 / 1024.0).round(),
+    })))
+}
+
 // ============ 订阅相关端点 ============
 
 #[derive(Deserialize)]
@@ -2221,6 +2319,7 @@ async fn main() -> std::io::Result<()> {
                             .route("/batch-tasks/{id}", web::delete().to(delete_batch_task))
                             .route("/download-records", web::get().to(get_download_records))
                             .route("/download-records/{id}", web::delete().to(delete_download_record))
+                            .route("/cleanup-downloads", web::post().to(cleanup_downloads))
                             .route("/subscriptions", web::get().to(get_subscriptions))
                             .route("/subscriptions", web::post().to(add_subscription))
                             .route("/subscriptions", web::delete().to(remove_subscription))

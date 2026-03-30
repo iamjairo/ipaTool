@@ -155,15 +155,25 @@
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
           下载记录
         </h3>
-        <el-button
-          type="danger"
-          size="small"
-          :icon="Delete"
-          plain
-          @click="clearAllRecords"
-        >
-          清空全部
-        </el-button>
+        <div class="flex gap-2">
+          <el-button
+            type="warning"
+            size="small"
+            plain
+            @click="cleanupServerFiles"
+          >
+            清理服务器文件
+          </el-button>
+          <el-button
+            type="danger"
+            size="small"
+            :icon="Delete"
+            plain
+            @click="clearAllRecords"
+          >
+            清空全部
+          </el-button>
+        </div>
       </div>
       <el-space
         direction="vertical"
@@ -301,7 +311,7 @@ const loading = ref(false)
 const loadRecords = async () => {
   loading.value = true
   try {
-    const response = await fetch(`${API_BASE}/download-records`)
+    const response = await fetch(`${API_BASE}/download-records`, { credentials: 'include' })
     const data = await response.json()
     if (data.ok) {
       records.value = data.data || []
@@ -322,6 +332,7 @@ const removeRecord = async (id) => {
     })
 
     const response = await fetch(`${API_BASE}/download-records/${id}`, {
+      credentials: 'include',
       method: 'DELETE'
     })
     const data = await response.json()
@@ -350,6 +361,7 @@ const clearAllRecords = async () => {
     })
 
     const response = await fetch(`${API_BASE}/download-records`, {
+      credentials: 'include',
       method: 'DELETE'
     })
     const data = await response.json()
@@ -364,6 +376,35 @@ const clearAllRecords = async () => {
     if (error !== 'cancel') {
       console.error('Failed to clear records:', error)
       ElMessage.error('清空失败')
+    }
+  }
+}
+
+// 清理服务器上的下载文件
+const cleanupServerFiles = async () => {
+  try {
+    await ElMessageBox.confirm('确定要清理服务器上所有已下载的 IPA 文件吗？这会释放磁盘空间，但不影响下载记录。', '确认清理', {
+      type: 'warning',
+      confirmButtonText: '确定清理',
+      cancelButtonText: '取消'
+    })
+
+    const response = await fetch(`${API_BASE}/cleanup-downloads`, {
+      credentials: 'include',
+      method: 'POST'
+    })
+    const data = await response.json()
+
+    if (data.ok) {
+      const info = data.data
+      ElMessage.success(`已清理 ${info.cleaned} 个任务目录，释放 ${info.freed_mb}MB`)
+    } else {
+      ElMessage.error(data.error || '清理失败')
+    }
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('Failed to cleanup files:', error)
+      ElMessage.error('清理失败')
     }
   }
 }
