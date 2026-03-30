@@ -17,14 +17,15 @@
 
     <div v-if="artifacts.length > 0" class="space-y-3">
       <div v-for="item in artifacts" :key="item.id" class="artifact-row">
-        <img :src="item.artworkUrl || 'https://via.placeholder.com/56'" :alt="item.appName" class="artifact-artwork">
+        <AppArtwork :src="item.artworkUrl" :alt="item.appName" :label="item.appName || item.fileName" />
         <div class="artifact-main">
           <div class="artifact-top">
             <div class="min-w-0">
               <div class="artifact-title">{{ item.appName || item.fileName }}</div>
               <div class="artifact-meta">
-                <span>{{ item.artistName || item.accountEmail || '未知来源' }}</span>
+                <span>{{ item.artistName || '未知开发者' }}</span>
                 <span>版本 {{ item.version || '未知' }}</span>
+                <span>账号 {{ item.accountEmail || '未知账号' }}</span>
                 <span>{{ formatFileSize(item.fileSize) }}</span>
               </div>
             </div>
@@ -33,7 +34,7 @@
           <div class="artifact-path">{{ item.filePath }}</div>
           <div class="artifact-actions">
             <el-button type="primary" size="small" @click="download(item.downloadUrl)">下载</el-button>
-            <el-button v-if="item.installUrl" type="success" size="small" @click="install(item.installUrl)">安装</el-button>
+            <el-button type="success" size="small" :disabled="!item.installUrl" @click="item.installUrl && install(item.installUrl)">安装</el-button>
             <el-button type="danger" size="small" plain @click="removeArtifact(item)">删除</el-button>
           </div>
         </div>
@@ -53,6 +54,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppArtwork from './AppArtwork.vue'
 
 const API_BASE = '/api'
 const artifacts = ref([])
@@ -138,14 +140,6 @@ onMounted(loadArtifacts)
 .dark .artifact-row {
   background: rgba(17, 24, 39, 0.72);
   border-color: rgba(71, 85, 105, 0.45);
-}
-
-.artifact-artwork {
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  border-radius: 14px;
-  object-fit: cover;
 }
 
 .artifact-main {
