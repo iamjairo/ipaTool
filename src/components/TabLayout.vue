@@ -1,110 +1,115 @@
 <template>
   <div
     class="tab-layout"
-    :class="{ 'mobile-layout': isMobile, 'desktop-layout': !isMobile }"
+    :class="{ 'mobile-layout': isMobile }"
   >
-    <!-- Desktop: Tab Bar at Top -->
+    <!-- Desktop: Tab Bar -->
     <div
       v-if="!isMobile"
-      class="desktop-tab-bar-wrapper"
+      class="desktop-tab-bar"
     >
-      <el-tabs 
-        v-model="appStore.activeTab" 
-        class="tab-bar desktop-tabs"
-      >
-        <el-tab-pane
+      <div class="tab-bar-inner">
+        <button
           v-for="tab in tabs"
           :key="tab.id"
-          :name="tab.id"
+          :class="['tab-btn', { 'tab-btn-active': appStore.activeTab === tab.id }]"
+          :title="tab.label"
+          @click="appStore.activeTab = tab.id"
         >
-          <template #label>
-            <div class="tab-label-wrapper">
-              <el-badge 
-                v-if="tab.badge" 
-                :value="tab.badge" 
-                class="tab-badge"
-                :max="99"
-              >
-                <div class="tab-label-content">
-                  <el-icon class="tab-icon">
-                    <component :is="tab.icon" />
-                  </el-icon>
-                  <span class="tab-text">{{ tab.label }}</span>
-                </div>
-              </el-badge>
-              <div
-                v-else
-                class="tab-label-content"
-              >
-                <el-icon class="tab-icon">
-                  <component :is="tab.icon" />
-                </el-icon>
-                <span class="tab-text">{{ tab.label }}</span>
-              </div>
-            </div>
-          </template>
-        </el-tab-pane>
-      </el-tabs>
+          <div class="tab-btn-content">
+            <!-- badge wrapper -->
+            <el-badge
+              v-if="tab.badge"
+              :value="tab.badge"
+              :max="99"
+              class="tab-badge"
+            >
+              <svg
+                class="tab-svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                v-html="tab.svgPath"
+              />
+            </el-badge>
+            <svg
+              v-else
+              class="tab-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              v-html="tab.svgPath"
+            />
+          </div>
+        </button>
+      </div>
     </div>
 
-    <!-- Tab Content -->
+    <!-- Content -->
     <div
       class="tab-content"
-      :class="{ 'with-desktop-tabs': !isMobile, 'with-mobile-tabs': isMobile }"
+      :class="{ 'with-mobile-tabs': isMobile }"
     >
-      <component 
-        :is="currentTabComponent" 
-        v-bind="currentTabProps" 
+      <component
+        :is="currentTabComponent"
+        v-bind="currentTabProps"
         @app-selected="handleAppSelected"
         @download-started="handleDownloadStarted"
         @accounts-updated="handleAccountsUpdated"
         @remove-item="emit('remove-item', $event)"
         @clear-all="emit('clear-queue')"
+        @logout="emit('logout')"
       />
     </div>
 
-    <!-- Mobile: Tab Bar at Bottom -->
+    <!-- Mobile: Bottom Tab Bar -->
     <div
       v-if="isMobile"
-      class="mobile-tab-bar-wrapper"
+      class="mobile-tab-bar"
     >
-      <el-tabs 
-        v-model="appStore.activeTab" 
-        class="tab-bar mobile-tabs"
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        :class="['mobile-tab-btn', { 'mobile-tab-btn-active': appStore.activeTab === tab.id }]"
+        @click="appStore.activeTab = tab.id"
       >
-        <el-tab-pane
-          v-for="tab in tabs"
-          :key="tab.id"
-          :name="tab.id"
-        >
-          <template #label>
-            <div class="tab-label-wrapper">
-              <el-badge 
-                v-if="tab.badge" 
-                :value="tab.badge" 
-                class="tab-badge"
-                :max="99"
-              >
-                <div class="tab-label-content">
-                  <el-icon class="tab-icon">
-                    <component :is="tab.icon" />
-                  </el-icon>
-                  <span class="tab-text">{{ tab.label }}</span>
-                </div>
-              </el-badge>
-              <div
-                v-else
-                class="tab-label-content"
-              >
-                <el-icon class="tab-icon">
-                  <component :is="tab.icon" />
-                </el-icon>
-                <span class="tab-text">{{ tab.label }}</span>
-              </div>
-            </div>
-          </template>
-        </el-tab-pane>
-      </el-tabs>
+        <div class="mobile-tab-icon">
+          <el-badge
+            v-if="tab.badge"
+            :value="tab.badge"
+            :max="99"
+            class="tab-badge"
+          >
+            <svg
+              class="tab-svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              v-html="tab.svgPath"
+            />
+          </el-badge>
+          <svg
+            v-else
+            class="tab-svg"
+            viewBox="0 0 24 24"
+              fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            v-html="tab.svgPath"
+          />
+        </div>
+      </button>
     </div>
   </div>
 </template>
@@ -112,87 +117,77 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useAppStore } from '../stores/app'
-import { User, Download, List, Collection, Bell } from '@element-plus/icons-vue'
-import AccountManager from './AccountManager.vue'
 import DownloadManager from './DownloadManager.vue'
 import DownloadQueue from './DownloadQueue.vue'
-import BatchDownload from './BatchDownload.vue'
+import IpaManager from './IpaManager.vue'
 import AppSubscription from './AppSubscription.vue'
+import Settings from './Settings.vue'
 
 const appStore = useAppStore()
-const emit = defineEmits(['app-selected', 'download-started', 'accounts-updated', 'remove-item', 'clear-queue'])
-const isMobile = ref(true)
+const emit = defineEmits(['app-selected', 'download-started', 'accounts-updated', 'remove-item', 'clear-queue', 'logout'])
+const isMobile = ref(false)
 
 const checkMobile = () => {
   isMobile.value = window.innerWidth < 768
 }
 
-const handleAccountsUpdated = (accounts) => {
-  emit('accounts-updated', accounts)
-}
+const handleAccountsUpdated = (v) => emit('accounts-updated', v)
+const handleAppSelected = (app) => emit('app-selected', app)
+const handleDownloadStarted = (task) => emit('download-started', task)
 
-const handleAppSelected = (app) => {
-  emit('app-selected', app)
-}
-
-const handleDownloadStarted = (task) => {
-  emit('download-started', task)
-}
-
+// SVG paths for tab icons — semantic, clear, consistent
 const tabs = computed(() => [
-  {
-    id: 'account',
-    label: '账号',
-    icon: User
-  },
   {
     id: 'download',
     label: '下载',
-    icon: Download,
+    svgPath: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
     badge: appStore.downloadState.selectedApp ? '1' : null
   },
   {
     id: 'queue',
     label: '队列',
-    icon: List,
+    svgPath: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
     badge: appStore.taskQueue.length > 0 ? String(appStore.taskQueue.length) : null
   },
   {
-    id: 'batch',
-    label: '批量下载',
-    icon: Collection,
-    badge: appStore.batchDraftItems.length > 0 ? String(appStore.batchDraftItems.length) : null
+    id: 'ipa',
+    label: 'IPA',
+    svgPath: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'
   },
   {
     id: 'subscription',
     label: '订阅',
-    icon: Bell
+    svgPath: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>'
+  },
+  {
+    id: 'settings',
+    label: '设置',
+    svgPath: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>'
   }
 ])
 
 const currentTabComponent = computed(() => {
-  const components = {
-    account: AccountManager,
+  const map = {
     download: DownloadManager,
     queue: DownloadQueue,
-    batch: BatchDownload,
-    subscription: AppSubscription
+    ipa: IpaManager,
+    subscription: AppSubscription,
+    settings: Settings
   }
-  return components[appStore.activeTab] || DownloadManager
+  return map[appStore.activeTab] || DownloadManager
 })
 
 const currentTabProps = computed(() => {
-  switch (appStore.activeTab) {
-    case 'download':
-      return { 
-        selectedApp: appStore.downloadState.selectedApp,
-        accountsUpdated: appStore.accountsUpdateCounter
-      }
-    case 'queue':
-      return { queue: appStore.taskQueue }
-    default:
-      return {}
+  if (appStore.activeTab === 'download') {
+    return {
+      selectedApp: appStore.downloadState.selectedApp,
+      accountsUpdated: appStore.accountsUpdateCounter
+    }
   }
+  if (appStore.activeTab === 'queue') {
+    return { queue: appStore.taskQueue }
+  }
+  return {}
 })
 
 onMounted(() => {
@@ -212,283 +207,191 @@ onUnmounted(() => {
   min-height: calc(100vh - 180px);
 }
 
-.desktop-layout {
-  flex-direction: column;
-}
-
-.mobile-layout {
-  flex-direction: column;
-}
-
 .tab-content {
   flex: 1;
   overflow-y: auto;
 }
 
-.tab-content.with-desktop-tabs {
-  padding-top: 0;
-  padding-bottom: 24px;
-}
-
 .tab-content.with-mobile-tabs {
-  padding-bottom: 100px;  /* 增加底部间距，防止被 tab 栏遮盖 */
+  padding-bottom: 100px;
 }
 
-/* Tab Bar 样式优化 */
-.tab-bar :deep(.el-tabs__header) {
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  transition: all 0.3s ease;
-}
-
-.dark .tab-bar :deep(.el-tabs__header) {
-}
-
-/* Desktop Tab Bar */
-.desktop-tab-bar-wrapper {
+/* ===== Desktop Tab Bar ===== */
+.desktop-tab-bar {
   position: sticky;
   top: 0;
-  margin: 0 -48px;
   z-index: 100;
- 
+  margin: 0 -48px;
+  padding: 12px 0;
+  background: rgba(255,255,255,0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
 }
 
-.dark .desktop-tab-bar-wrapper {
+:root.dark .desktop-tab-bar,
+.dark .desktop-tab-bar {
+  background: rgba(17,24,39,0.85);
+  border-bottom-color: rgba(55,65,81,0.5);
 }
 
-.tab-bar.desktop-tabs :deep(.el-tabs__header) {
-  border-bottom: 0;
-  margin: 0;
-  padding: 12px 24px;
-}
-
-.dark .tab-bar.desktop-tabs :deep(.el-tabs__header) {
-  border-bottom: 0;
-}
-
-.tab-bar :deep(.el-tabs__nav-wrap) {
-  padding: 0;
-}
-
-.tab-bar :deep(.el-tabs__nav) {
-  border: none;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.03);
+.tab-bar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 320px;
+  margin: 0 auto;
   padding: 4px;
+  background: rgba(0,0,0,0.04);
+  border-radius: 14px;
 }
 
-.dark .tab-bar :deep(.el-tabs__nav) {
-  background: rgba(255, 255, 255, 0.05);
+.dark .tab-bar-inner {
+  background: rgba(255,255,255,0.06);
 }
 
-.tab-bar :deep(.el-tabs__item) {
-  font-weight: 500;
-  padding: 0 24px;
+.tab-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
   height: 44px;
-  line-height: 44px;
-  color: #6b7280;
-  transition: all 0.3s ease;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
   position: relative;
 }
 
-.tab-bar :deep(.el-tabs__item:hover) {
+.tab-btn:hover {
   color: #3b82f6;
-  background: rgba(59, 130, 246, 0.08);
+  background: rgba(59,130,246,0.08);
 }
 
-.dark .tab-bar :deep(.el-tabs__item:hover) {
-  color: #60a5fa;
-  background: rgba(96, 165, 250, 0.15);
-}
-
-.dark .tab-bar :deep(.el-tabs__item) {
+.dark .tab-btn {
   color: #9ca3af;
 }
 
-.tab-bar :deep(.el-tabs__item:hover) {
-  color: #3b82f6;
-}
-
-.dark .tab-bar :deep(.el-tabs__item:hover) {
+.dark .tab-btn:hover {
   color: #60a5fa;
+  background: rgba(96,165,250,0.12);
 }
 
-.tab-bar :deep(.el-tabs__item.is-active) {
-  color: #3b82f6;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+.tab-btn-active {
+  color: #3b82f6 !important;
+  background: rgba(255,255,255,0.95) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
 }
 
-.dark .tab-bar :deep(.el-tabs__item.is-active) {
-  color: #60a5fa;
-  background: rgba(0, 0, 0, 0.2);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+.dark .tab-btn-active {
+  color: #60a5fa !important;
+  background: rgba(0,0,0,0.25) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
 }
 
-.tab-bar :deep(.el-tabs__active-bar) {
-  display: none;
-}
-
-.tab-label-wrapper {
+.tab-btn-content {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: center;
   position: relative;
-  width: 100%;
 }
 
-.tab-label-content {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.tab-icon {
-  font-size: 18px;
-  transition: transform 0.2s ease;
-}
-
-.tab-bar :deep(.el-tabs__item:hover) .tab-icon {
-  transform: scale(1.1);
-}
-
-.tab-text {
-  font-size: 14px;
-  font-weight: 500;
+.tab-svg {
+  width: 22px;
+  height: 22px;
 }
 
 .tab-badge :deep(.el-badge__content) {
   position: absolute;
-  top: -5px;
-  right: -5px;
-  background-color: #ef4444;
-  border-color: #ffffff;
-  font-size: 11px;
-  font-weight: 600;
-  min-width: 18px;
-  height: 18px;
-  line-height: 18px;
-  padding: 0 5px;
+  top: -6px;
+  right: -8px;
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
   z-index: 10;
 }
 
-.dark .tab-badge :deep(.el-badge__content) {
-  background-color: #ef4444;
-  border-color: #1f2937;
-}
-
-/* 移动端标签栏样式 */
-.mobile-tab-bar-wrapper {
+/* ===== Mobile Tab Bar ===== */
+.mobile-tab-bar {
   position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
-  top: auto;
   z-index: 100;
-  background: rgba(255, 255, 255, 0.98);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);  /* 添加顶部阴影 */
-  padding-bottom: env(safe-area-inset-bottom);  /* 适配 iPhone X 等设备的底部安全区域 */
-}
-
-.dark .mobile-tab-bar-wrapper {
-  background: rgba(31, 41, 55, 0.98);
-  border-top: 1px solid rgba(55, 65, 81, 0.5);
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.2);
-}
-
-.tab-bar.mobile-tabs :deep(.el-tabs__header) {
-  border: none;
-  padding: 0;
-  margin: 0;
-}
-
-.tab-bar.mobile-tabs :deep(.el-tabs__nav-wrap) {
-  padding: 0;
-}
-
-.tab-bar.mobile-tabs :deep(.el-tabs__nav) {
-  width: 100%;
   display: flex;
   justify-content: space-around;
+  align-items: center;
+  height: 60px;
+  padding-bottom: env(safe-area-inset-bottom);
+  background: rgba(255,255,255,0.97);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.04);
 }
 
-.tab-bar.mobile-tabs :deep(.el-tabs__item) {
+.dark .mobile-tab-bar {
+  background: rgba(31,41,55,0.97);
+  border-top-color: rgba(55,65,81,0.5);
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+}
+
+.mobile-tab-btn {
   flex: 1;
-  text-align: center;
-  padding: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 56px;
-  line-height: 1;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: #6b7280;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
 }
 
-.tab-bar.mobile-tabs .tab-label-wrapper {
-  flex-direction: column;
-  gap: 2px;
+.dark .mobile-tab-btn {
+  color: #9ca3af;
 }
 
-.tab-bar.mobile-tabs .tab-icon {
-  font-size: 20px;
+.mobile-tab-btn-active {
+  color: #3b82f6 !important;
 }
 
-.tab-bar.mobile-tabs .tab-text {
-  font-size: 11px;
+.dark .mobile-tab-btn-active {
+  color: #60a5fa !important;
 }
 
-.tab-bar.mobile-tabs :deep(.el-tabs__active-bar) {
-  display: none;
+.mobile-tab-icon {
+  position: relative;
 }
 
-.tab-bar.mobile-tabs :deep(.el-tabs__item.is-active) {
-  background: rgba(59, 130, 246, 0.1);
+.mobile-tab-icon .tab-svg {
+  width: 24px;
+  height: 24px;
 }
 
-.dark .tab-bar.mobile-tabs :deep(.el-tabs__item.is-active) {
-  background: rgba(59, 130, 246, 0.2);
-}
-
-.tab-bar.mobile-tabs .tab-badge :deep(.el-badge__content) {
+.mobile-tab-btn .tab-badge :deep(.el-badge__content) {
   position: absolute;
-  top: -4px;
-  right: -8px;
-  transform: translate(0, 0);
+  top: -6px;
+  right: -10px;
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  line-height: 16px;
+  padding: 0 4px;
   z-index: 10;
 }
 
-.tab-bar.mobile-tabs .tab-label-wrapper {
-  position: relative;
-  padding-top: 4px;
-}
-
-/* 桌面端标签栏样式 */
-.tab-bar.desktop-tabs :deep(.el-tabs__nav-wrap::after) {
-  display: none;
-}
-
-.tab-bar.desktop-tabs :deep(.el-tabs__nav-wrap) {
-  padding: 0 24px;
-}
-
-.tab-bar.desktop-tabs :deep(.el-tabs__nav) {
-  gap: 4px;
-}
-
-.tab-bar.desktop-tabs :deep(.el-tabs__item) {
-  padding: 0 28px;
-  font-size: 14px;
-}
-
-/* 移动端内容区域底部留白 */
 @media (max-width: 767px) {
   .tab-content.with-mobile-tabs {
-    padding-bottom: 120px;  /* 确保有足够的底部间距，避免被 tab 栏遮挡 */
+    padding-bottom: 80px;
   }
 }
 </style>

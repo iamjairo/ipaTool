@@ -137,8 +137,16 @@ export const useAppStore = defineStore('app', () => {
   }
 
   // 从队列移除任务
-  const removeFromQueue = (index) => {
-    taskQueue.value.splice(index, 1)
+  const removeFromQueue = (idOrIndex) => {
+    if (typeof idOrIndex === 'number' && idOrIndex >= 0 && idOrIndex < taskQueue.value.length) {
+      taskQueue.value.splice(idOrIndex, 1)
+      return
+    }
+
+    const index = taskQueue.value.findIndex(item => item.id === idOrIndex)
+    if (index >= 0) {
+      taskQueue.value.splice(index, 1)
+    }
   }
 
   // 清空任务队列

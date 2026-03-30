@@ -1,6 +1,7 @@
 <template>
-  <div class="card">
-    <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
+  <div class="space-y-6">
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-4">
       <div class="flex items-center space-x-3">
         <div class="w-12 h-12 bg-gradient-to-br from-green-500 to-teal-500 rounded-xl flex items-center justify-center shadow-lg flex-shrink-0">
           <svg
@@ -9,15 +10,10 @@
             stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-            />
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
           </svg>
         </div>
-        <div class="flex-shrink-0">
+        <div>
           <h2 class="text-xl font-bold text-gray-900 dark:text-white">
             应用订阅与更新
           </h2>
@@ -254,6 +250,9 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh, Delete } from '@element-plus/icons-vue'
+import { useNotifications } from '../composables/useNotifications'
+
+const notifications = useNotifications()
 
 const API_BASE = '/api'
 
@@ -277,7 +276,7 @@ const updateCount = computed(() => updates.value.length)
 // 加载订阅列表
 const loadSubscriptions = async () => {
   try {
-    const response = await fetch(`${API_BASE}/subscriptions`)
+    const response = await fetch(`${API_BASE}/subscriptions`, { credentials: 'include' })
     const data = await response.json()
     if (data.ok) {
       subscriptions.value = data.data || []
@@ -292,13 +291,21 @@ const loadSubscriptions = async () => {
 const checkUpdates = async () => {
   checking.value = true
   try {
-    const response = await fetch(`${API_BASE}/check-updates`)
+    const response = await fetch(`${API_BASE}/check-updates`, { credentials: 'include' })
     const data = await response.json()
 
     if (data.ok) {
       updates.value = data.data.updates || []
       if (updates.value.length > 0) {
         ElMessage.success(`发现 ${updates.value.length} 个更新`)
+        // 逐个发送浏览器通知
+        for (const update of updates.value) {
+          notifications.notifyVersionUpdate(
+            update.app_name,
+            update.current_version,
+            update.latest_version
+          )
+        }
       } else {
         ElMessage.info('所有应用都是最新版本')
       }
@@ -323,6 +330,7 @@ const addSubscription = async () => {
   subscribing.value = true
   try {
     const response = await fetch(`${API_BASE}/subscriptions`, {
+      credentials: 'include',
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(subscribeForm.value)
@@ -360,6 +368,7 @@ const removeSubscription = async (sub) => {
     })
 
     const response = await fetch(`${API_BASE}/subscriptions?app_id=${sub.app_id}&account_email=${sub.account_email}`, {
+      credentials: 'include',
       method: 'DELETE'
     })
     const data = await response.json()
@@ -399,18 +408,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.card {
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.dark .card {
-  background: #1f2937;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
 .sub-card {
   transition: all 0.2s ease;
 }

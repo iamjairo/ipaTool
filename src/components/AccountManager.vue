@@ -70,7 +70,8 @@
               circle
               size="small"
               class="refresh-button"
-              title="刷新会话"
+              :title="account.hasSavedCredentials ? '刷新会话' : '未保存密码，无法自动刷新'"
+              :disabled="!account.hasSavedCredentials"
               :loading="refreshingIndex === index"
               @click="refreshAccount(index)"
             />
@@ -148,6 +149,7 @@
               size="large"
               clearable
               class="form-input"
+              :class="{ 'mfa-highlight': mfaRequired }"
             >
               <template #prefix>
                 <el-icon class="field-icon">
@@ -155,6 +157,12 @@
                 </el-icon>
               </template>
             </el-input>
+            <p
+              v-if="mfaRequired"
+              class="mfa-hint"
+            >
+              ⚠️ 请输入受信任设备上收到的 6 位验证码
+            </p>
           </div>
 
           <!-- 保存密码选项 -->
@@ -252,6 +260,7 @@ const logging = ref(false)
 const autoLogging = ref(false)
 const savePassword = ref(true) // 默认保存密码
 const refreshingIndex = ref(null) // 正在刷新的账号索引
+const mfaRequired = ref(false) // 是否处于 MFA 等待状态
 
 // 表单验证
 const isFormValid = computed(() => {
@@ -263,7 +272,7 @@ const API_BASE = '/api'
 // 加载保存的凭证列表（仅邮箱）
 const loadSavedCredentials = async () => {
 	try {
-		const response = await fetch(`${API_BASE}/credentials`)
+		const response = await fetch(`${API_BASE}/credentials`, { credentials: 'include' })
 		const data = await response.json()
 
 		if (data.ok && data.data) {
@@ -287,18 +296,41 @@ const loadAccounts = async () => {
 
 	// 然后从服务器获取最新的已登录账号列表
 	try {
-		const response = await fetch(`${API_BASE}/accounts`)
+		const response = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
 		const data = await response.json()
 
-		if (data.ok && data.data) {
+		if (data.ok && data.data && data.data.length > 0) {
 			// 同步服务器账号列表到本地
 			accounts.value = data.data.map((acc) => ({
 				token: acc.token,
 				email: acc.email,
 				dsid: acc.dsid,
 				region: acc.region || 'US',
+				hasSavedCredentials: !!acc.hasSavedCredentials,
 			}))
 			saveAccounts()
+		} else if (data.ok && (!data.data || data.data.length === 0)) {
+			// 服务端无已登录账号，尝试用保存的凭证自动恢复
+			try {
+				const autoRes = await fetch(`${API_BASE}/auto-login`, { credentials: 'include', method: 'POST' })
+				const autoData = await autoRes.json()
+				if (autoData.ok && autoData.data?.succeeded?.length > 0) {
+					const retryRes = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
+					const retryData = await retryRes.json()
+					if (retryData.ok && retryData.data) {
+						accounts.value = retryData.data.map((acc) => ({
+							token: acc.token,
+							email: acc.email,
+							dsid: acc.dsid,
+							region: acc.region || 'US',
+							hasSavedCredentials: !!acc.hasSavedCredentials,
+						}))
+						saveAccounts()
+					}
+				}
+			} catch (e) {
+				console.warn('Auto-login restore failed:', e)
+			}
 		}
 	} catch (error) {
 		console.error('Failed to load accounts from server:', error)
@@ -327,9 +359,9 @@ const loginAccount = async () => {
 
 	logging.value = true
 
-	// 尝试登录，不带MFA代码
 	try {
 		const response = await fetch(`${API_BASE}/login`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -344,30 +376,53 @@ const loginAccount = async () => {
 
 		const data = await response.json()
 
-		if (!data.ok) {
-			// 检查是否需要两步验证码（多种错误关键词匹配）
-			if (data.error && (
-				data.error.includes('verification code') || 
-				data.error.includes('two-factor') ||
-				data.error.includes('MFA') ||
-				data.error.includes('二次验证')
-			)) {
-				// 需要二次验证，提示用户在表单输入
-				ElMessage.warning('此账号需要二次验证，请在验证码输入框输入 6 位数验证码后，再次点击登录')
-				logging.value = false
-				return
-			}
-			ElMessage.error(`登录失败：${data.error || '未知错误'}`)
+		// Network/server error
+		if (!response.ok && !data.ok) {
+			ElMessage.error(`登录失败：${data.error || '服务器错误'}`)
 			logging.value = false
 			return
 		}
 
-		// 登录成功，保存账号信息
+		// MFA needed — first round, no code provided yet
+		if (data.ok && data.data?.status === 'need_mfa') {
+			mfaRequired.value = true
+			ElMessage({
+				type: 'warning',
+				message: '此账号需要二次验证，请查看你的受信任设备上的验证码，填入后再次点击登录',
+				duration: 8000,
+			})
+			logging.value = false
+			return
+		}
+
+		// MFA code was wrong/expired — keep the session, let user retry
+		if (data.ok && data.data?.status === 'mfa_failed') {
+			ElMessage.error('验证码无效或已过期，请重新输入')
+			newAccount.value.code = ''
+			logging.value = false
+			return
+		}
+
+		// Business logic error (bad password, account locked, etc.)
+		if (!data.ok) {
+			const errMsg = data.error || '未知错误'
+			ElMessage.error(`登录失败：${errMsg}`)
+			// If it looks like a credential error, hint about MFA
+			if (errMsg.includes('密码') || errMsg.includes('BadLogin')) {
+				mfaRequired.value = true
+			}
+			logging.value = false
+			return
+		}
+
+		// Login success
+		mfaRequired.value = false
 		accounts.value.push({
-			token: data.token,
-			email: data.email,
-			dsid: data.dsid,
-			region: data.region || 'US',
+			token: data.data.token,
+			email: data.data.email,
+			dsid: data.data.dsid,
+			region: data.data.region || 'US',
+			hasSavedCredentials: !!savePassword.value,
 		})
 
 		// 更新保存的凭证列表
@@ -378,9 +433,9 @@ const loginAccount = async () => {
 		// 重置表单
 		newAccount.value = { email: '', password: '', code: '' }
 
-		ElMessage.success(`登录成功：${data.email}`)
+		ElMessage.success(`登录成功：${data.data.email}`)
 	} catch (error) {
-		ElMessage.error(`登录失败：${error.message}`)
+		ElMessage.error(`网络错误：${error.message}`)
 	} finally {
 		logging.value = false
 	}
@@ -393,6 +448,7 @@ const removeAccount = async (index) => {
 		// 从服务器删除账号（会同时删除保存的凭证）
 		try {
 			const response = await fetch(`${API_BASE}/accounts/${account.token}`, {
+				credentials: 'include',
 				method: 'DELETE',
 			})
 
@@ -415,26 +471,38 @@ const removeAccount = async (index) => {
 const refreshAccount = async (index) => {
 	const account = accounts.value[index]
 	if (!account) return
-	
+
+	if (!account.hasSavedCredentials) {
+		ElMessage.warning('这个账号没有保存密码，无法自动刷新。请重新登录并勾选“保存密码”。')
+		return
+	}
+
 	refreshingIndex.value = index
-	
+
 	try {
 		const response = await fetch(`${API_BASE}/login/refresh`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json'
 			},
 			body: JSON.stringify({ token: account.token })
 		})
-		
+
 		const data = await response.json()
-		
+
 		if (data.ok) {
-			ElMessage.warning('账号会话已刷新')
+			ElMessage.success('账号会话已刷新')
 			// 刷新账号列表以获取最新信息
-			await fetchAccounts()
+			await loadSavedCredentials()
+			await loadAccounts()
 		} else {
-			ElMessage.error(`刷新失败: ${data.error}`)
+			const errMsg = data.error || '刷新失败'
+			if (errMsg.includes('未找到保存的密码')) {
+				ElMessage.error('刷新失败：这个账号没有保存密码。请重新登录并勾选“保存密码”。')
+			} else {
+				ElMessage.error(`刷新失败: ${errMsg}`)
+			}
 		}
 	} catch (error) {
 		console.error('Failed to refresh account:', error)
@@ -452,6 +520,7 @@ const autoLoginAll = async () => {
 
 	try {
 		const response = await fetch(`${API_BASE}/auto-login`, {
+			credentials: 'include',
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -470,6 +539,7 @@ const autoLoginAll = async () => {
 						token: result.token,
 						email: result.email,
 						dsid: result.dsid,
+						hasSavedCredentials: true,
 					})
 				}
 			})
@@ -1071,6 +1141,23 @@ defineExpose({
 
 .dark .checkbox-label {
 	color: #9ca3af;
+}
+
+/* MFA 高亮提示 */
+.mfa-highlight :deep(.el-input__wrapper) {
+	box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.3) !important;
+	border-color: #f59e0b !important;
+}
+
+.mfa-hint {
+	font-size: 12px;
+	color: #f59e0b;
+	margin: 4px 0 0 0;
+	font-weight: 500;
+}
+
+.dark .mfa-hint {
+	color: #fbbf24;
 }
 
 /* 响应式设计 */

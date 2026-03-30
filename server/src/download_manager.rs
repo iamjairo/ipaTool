@@ -4,16 +4,18 @@ use crate::ipa_handler::{
 };
 use reqwest::Client;
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub struct DownloadManager {
     db: Arc<Mutex<Database>>,
     client: Client,
+    downloads_dir: PathBuf,
 }
 
 impl DownloadManager {
-    pub fn new(db: Arc<Mutex<Database>>) -> Self {
+    pub fn new(db: Arc<Mutex<Database>>, downloads_dir: PathBuf) -> Self {
         Self {
             db,
             client: Client::builder()
@@ -22,6 +24,7 @@ impl DownloadManager {
                 .pool_idle_timeout(Duration::from_secs(90))
                 .build()
                 .unwrap_or_default(),
+            downloads_dir,
         }
     }
 
@@ -51,8 +54,9 @@ impl DownloadManager {
 
         // 异步执行批量下载
         let db_clone = Arc::clone(&self.db);
+        let downloads_dir = self.downloads_dir.clone();
         tokio::spawn(async move {
-            Self::process_batch_download(db_clone, batch_id, items).await;
+            Self::process_batch_download(db_clone, downloads_dir, batch_id, items).await;
         });
 
         Ok(batch_id)
@@ -60,6 +64,7 @@ impl DownloadManager {
 
     async fn process_batch_download<S: AppleAuthService + Clone + Send + Sync>(
         db: Arc<Mutex<Database>>,
+        downloads_dir: PathBuf,
         batch_id: i64,
         items: Vec<BatchItem<S>>,
     ) {
@@ -80,6 +85,7 @@ impl DownloadManager {
 
                 let result = Self::download_with_retry(
                     &db,
+                    &downloads_dir,
                     &item.store,
                     &item.app_id,
                     item.version.as_deref(),
@@ -138,6 +144,7 @@ impl DownloadManager {
     // 带重试的下载
     async fn download_with_retry<S: AppleAuthService + Clone + Send + Sync>(
         db: &Arc<Mutex<Database>>,
+        downloads_dir: &PathBuf,
         store: &S,
         app_id: &str,
         version: Option<&str>,
@@ -150,26 +157,53 @@ impl DownloadManager {
         loop {
             let _start_time = Instant::now();
 
-            match Self::download_with_resume(store, app_id, version, account_email, resume_position)
+            match Self::download_with_resume(
+                downloads_dir,
+                store,
+                app_id,
+                version,
+                account_email,
+                resume_position,
+            )
                 .await
             {
                 Ok(result) => {
                     // 记录成功下载
-                    if let Some(metadata) = result.metadata {
+                    if let Some(file_path) = result.file {
+                        let file_meta = std::fs::metadata(&file_path).ok();
+                        let metadata = result.metadata;
                         let record = DownloadRecord {
                             id: None,
-                            app_name: metadata.bundle_display_name.clone(),
+                            job_id: None,
+                            app_name: metadata
+                                .as_ref()
+                                .map(|item| item.bundle_display_name.clone())
+                                .filter(|value| !value.is_empty())
+                                .unwrap_or_else(|| app_id.to_string()),
                             app_id: app_id.to_string(),
-                            bundle_id: Some(metadata.bundle_id.clone()),
-                            version: Some(metadata.bundle_short_version_string.clone()),
+                            bundle_id: metadata
+                                .as_ref()
+                                .map(|item| item.bundle_id.clone())
+                                .filter(|value| !value.is_empty()),
+                            version: metadata
+                                .as_ref()
+                                .map(|item| item.bundle_short_version_string.clone())
+                                .filter(|value| !value.is_empty()),
                             account_email: account_email.to_string(),
                             account_region: None,
                             download_date: Some(chrono::Utc::now().to_rfc3339()),
                             status: "completed".to_string(),
-                            file_size: None,
+                            file_size: file_meta.map(|info| info.len() as i64),
+                            file_path: Some(file_path),
                             install_url: None,
-                            artwork_url: Some(metadata.artwork_url.clone()),
-                            artist_name: Some(metadata.artist_name.clone()),
+                            artwork_url: metadata
+                                .as_ref()
+                                .map(|item| item.artwork_url.clone())
+                                .filter(|value| !value.is_empty()),
+                            artist_name: metadata
+                                .as_ref()
+                                .map(|item| item.artist_name.clone())
+                                .filter(|value| !value.is_empty()),
                             progress: Some(100),
                             error: None,
                             created_at: None,
@@ -202,18 +236,20 @@ impl DownloadManager {
 
     // 断点续传下载
     async fn download_with_resume<S: AppleAuthService + Clone>(
+        downloads_dir: &PathBuf,
         store: &S,
         app_id: &str,
         version: Option<&str>,
         account_email: &str,
         _resume_position: u64,
     ) -> Result<DownloadResult, Box<dyn std::error::Error + Send + Sync>> {
+        let download_path = downloads_dir.to_string_lossy().to_string();
         let params = DownloadParams {
             store,
             email: account_email,
             appid: app_id,
             app_ver_id: version,
-            download_path: "../downloads",
+            download_path: &download_path,
             auto_purchase: false,
             token: None,
             progress_callback: None,
