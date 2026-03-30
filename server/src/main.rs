@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -166,6 +166,62 @@ struct AppState {
     db: Arc<Mutex<Database>>,
     download_manager: Arc<DownloadManager>,
     job_store: JobStore,
+    downloads_dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct DownloadArtifact {
+    id: String,
+    path: PathBuf,
+    file_name: String,
+    file_size: u64,
+    modified_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadRecordView {
+    id: Option<i64>,
+    job_id: Option<String>,
+    app_name: String,
+    app_id: String,
+    bundle_id: Option<String>,
+    version: Option<String>,
+    account_email: String,
+    account_region: Option<String>,
+    download_date: Option<String>,
+    status: String,
+    file_size: Option<i64>,
+    file_path: Option<String>,
+    download_url: Option<String>,
+    install_url: Option<String>,
+    artwork_url: Option<String>,
+    artist_name: Option<String>,
+    progress: Option<i64>,
+    error: Option<String>,
+    created_at: Option<String>,
+    file_exists: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IpaArtifactView {
+    id: String,
+    file_name: String,
+    file_size: u64,
+    file_path: String,
+    modified_at: Option<String>,
+    app_name: String,
+    app_id: String,
+    bundle_id: Option<String>,
+    version: Option<String>,
+    account_email: Option<String>,
+    account_region: Option<String>,
+    artwork_url: Option<String>,
+    artist_name: Option<String>,
+    record_id: Option<i64>,
+    download_url: String,
+    install_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -340,23 +396,40 @@ fn unauthorized_response() -> HttpResponse {
 }
 
 fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<AuthenticatedAdmin, String> {
+    log::debug!("[auth:resolve] token={}..", &token[..8.min(token.len())]);
+
     let db = app_state
         .db
         .lock()
-        .map_err(|_| "认证服务暂时不可用".to_string())?;
+        .map_err(|e| {
+            log::error!("[auth:resolve] db lock failed: {:?}", e);
+            "认证服务暂时不可用".to_string()
+        })?;
 
     let session = db
         .get_session(token)
-        .map_err(|e| format!("查询登录态失败: {}", e))?
-        .ok_or_else(|| "未登录或登录已过期".to_string())?;
+        .map_err(|e| {
+            log::error!("[auth:resolve] get_session failed: {}", e);
+            format!("查询登录态失败: {}", e)
+        })?
+        .ok_or_else(|| {
+            log::debug!("[auth:resolve] no valid session for token={}..", &token[..8.min(token.len())]);
+            "未登录或登录已过期".to_string()
+        })?;
 
     let user = db
         .get_admin_user(&session.username)
-        .map_err(|e| format!("查询管理员失败: {}", e))?
+        .map_err(|e| {
+            log::error!("[auth:resolve] get_admin_user failed for {}: {}", session.username, e);
+            format!("查询管理员失败: {}", e)
+        })?
         .ok_or_else(|| {
             let _ = db.delete_session(token);
+            log::warn!("[auth:resolve] admin user not found: {}, session deleted", session.username);
             "管理员账号不存在".to_string()
         })?;
+
+    log::debug!("[auth:resolve] ok user={}", user.username);
 
     Ok(AuthenticatedAdmin {
         username: user.username,
@@ -410,6 +483,7 @@ where
     };
 
     if let Err(error_message) = resolve_admin_session(app_state.get_ref(), session_cookie.value()) {
+        log::warn!("[auth:middleware] session rejected: {}", error_message);
         return Ok(req
             .into_response(
                 HttpResponse::Unauthorized().json(ApiResponse::<String>::error(error_message)),
@@ -512,6 +586,186 @@ async fn get_versions(query: web::Query<VersionQuery>) -> impl Responder {
 fn build_base_url(req: &HttpRequest) -> String {
     let info = req.connection_info();
     format!("{}://{}", info.scheme(), info.host())
+}
+
+fn resolve_project_root() -> PathBuf {
+    if let Ok(root) = std::env::var("IPA_TOOL_ROOT") {
+        return PathBuf::from(root);
+    }
+
+    let mut candidates = Vec::new();
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.clone());
+        if let Some(parent) = cwd.parent() {
+            candidates.push(parent.to_path_buf());
+            if let Some(grand_parent) = parent.parent() {
+                candidates.push(grand_parent.to_path_buf());
+            }
+        }
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            candidates.push(parent.to_path_buf());
+            if let Some(grand_parent) = parent.parent() {
+                candidates.push(grand_parent.to_path_buf());
+                if let Some(great_grand_parent) = grand_parent.parent() {
+                    candidates.push(great_grand_parent.to_path_buf());
+                }
+            }
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.join("server/Cargo.toml").exists() && candidate.join("src").exists() {
+            return candidate;
+        }
+        if candidate.file_name().and_then(|name| name.to_str()) == Some("server")
+            && candidate.join("Cargo.toml").exists()
+        {
+            if let Some(parent) = candidate.parent() {
+                return parent.to_path_buf();
+            }
+        }
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn artifact_id_from_path(path: &Path, downloads_dir: &Path) -> Option<String> {
+    let relative = path.strip_prefix(downloads_dir).ok()?;
+    Some(relative.to_string_lossy().replace('\\', "__").replace('/', "__"))
+}
+
+fn resolve_artifact_path(downloads_dir: &Path, artifact_id: &str) -> Option<PathBuf> {
+    let relative = artifact_id.replace("__", "/");
+    let candidate = downloads_dir.join(relative);
+    let canonical = candidate.canonicalize().ok()?;
+    let canonical_root = downloads_dir.canonicalize().ok()?;
+    if canonical.starts_with(&canonical_root) {
+        Some(canonical)
+    } else {
+        None
+    }
+}
+
+fn build_record_download_url(req: &HttpRequest, record_id: i64) -> String {
+    format!("{}/api/download-records/{}/file", build_base_url(req), record_id)
+}
+
+fn build_record_install_url(req: &HttpRequest, record: &DownloadRecord, record_id: i64) -> Option<String> {
+    let download_url = build_record_download_url(req, record_id);
+    let bundle_id = record.bundle_id.clone()?;
+    let bundle_version = record.version.clone().filter(|value| !value.is_empty())?;
+    let title = if record.app_name.is_empty() {
+        record.file_path.as_ref()?.rsplit('/').next()?.trim_end_matches(".ipa").to_string()
+    } else {
+        record.app_name.clone()
+    };
+    let manifest_url = format!(
+        "{}/api/manifest?url={}&bundle_id={}&bundle_version={}&title={}",
+        build_base_url(req),
+        urlencoding::encode(&download_url),
+        urlencoding::encode(&bundle_id),
+        urlencoding::encode(&bundle_version),
+        urlencoding::encode(&title),
+    );
+    Some(format!(
+        "{}/api/install?manifest={}",
+        build_base_url(req),
+        urlencoding::encode(&manifest_url)
+    ))
+}
+
+fn scan_download_artifacts(downloads_dir: &Path) -> Vec<DownloadArtifact> {
+    fn visit(dir: &Path, root: &Path, artifacts: &mut Vec<DownloadArtifact>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, root, artifacts);
+                continue;
+            }
+
+            if path.extension().and_then(|ext| ext.to_str()) != Some("ipa") {
+                continue;
+            }
+
+            let meta = match entry.metadata() {
+                Ok(meta) => meta,
+                Err(_) => continue,
+            };
+            let id = match artifact_id_from_path(&path, root) {
+                Some(id) => id,
+                None => continue,
+            };
+            let modified_at = meta.modified().ok().map(chrono::DateTime::<Utc>::from);
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("download.ipa")
+                .to_string();
+
+            artifacts.push(DownloadArtifact {
+                id,
+                path,
+                file_name,
+                file_size: meta.len(),
+                modified_at,
+            });
+        }
+    }
+
+    let mut artifacts = Vec::new();
+    if downloads_dir.exists() {
+        visit(downloads_dir, downloads_dir, &mut artifacts);
+        artifacts.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+    }
+    artifacts
+}
+
+fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
+    let existing_records = db.get_all_download_records().unwrap_or_default();
+    let mut known_paths: HashMap<String, DownloadRecord> = HashMap::new();
+    for record in existing_records {
+        if let Some(path) = record.file_path.clone() {
+            known_paths.insert(path, record);
+        }
+    }
+
+    for artifact in scan_download_artifacts(downloads_dir) {
+        let absolute_path = artifact.path.to_string_lossy().to_string();
+        if known_paths.contains_key(&absolute_path) {
+            continue;
+        }
+
+        let app_name = artifact.file_name.trim_end_matches(".ipa").to_string();
+        let inferred = DownloadRecord {
+            id: None,
+            job_id: None,
+            app_name,
+            app_id: "unknown".to_string(),
+            bundle_id: None,
+            version: None,
+            account_email: "未知账号".to_string(),
+            account_region: None,
+            download_date: artifact.modified_at.map(|dt| dt.to_rfc3339()),
+            status: "completed".to_string(),
+            file_size: Some(artifact.file_size as i64),
+            file_path: Some(absolute_path),
+            install_url: None,
+            artwork_url: None,
+            artist_name: None,
+            progress: Some(100),
+            error: None,
+            created_at: None,
+        };
+        let _ = db.add_download_record(&inferred);
+    }
 }
 
 fn build_job_manifest_url(req: &HttpRequest, job_id: &str) -> String {
@@ -652,9 +906,10 @@ async fn start_download_direct(
     let job_for_task = job.clone();
     let job_id_for_task = job_id.clone();
     let db = data.db.clone();
+    let downloads_dir = data.downloads_dir.clone();
 
     tokio::spawn(async move {
-        let job_dir = format!("../downloads/jobs/{}", job_id_for_task);
+        let job_dir = downloads_dir.join("jobs").join(&job_id_for_task);
         if let Err(error) = tokio::fs::create_dir_all(&job_dir).await {
             let message = format!("创建任务目录失败: {}", error);
             job_for_task
@@ -679,12 +934,13 @@ async fn start_download_direct(
                 });
             });
 
+        let download_path = job_dir.to_string_lossy().to_string();
         let params = DownloadParams {
             store: &account_store,
             email: &account_email,
             appid: &appid,
             app_ver_id: app_ver_id.as_deref(),
-            download_path: &job_dir,
+            download_path: &download_path,
             auto_purchase,
             token: None,
             progress_callback: Some(progress_callback),
@@ -700,29 +956,43 @@ async fn start_download_direct(
                         .mark_ready(file_path.clone(), result.metadata.clone(), None)
                         .await;
 
-                    // 写入下载记录
-                    if let Some(meta) = &result.metadata {
-                        let record = DownloadRecord {
-                            id: None,
-                            app_name: meta.bundle_display_name.clone(),
-                            app_id: appid.clone(),
-                            bundle_id: Some(meta.bundle_id.clone()),
-                            version: Some(meta.bundle_short_version_string.clone()),
-                            account_email: account_email.clone(),
-                            account_region: None,
-                            download_date: None,
-                            status: "completed".to_string(),
-                            file_size: None,
-                            install_url: None,
-                            artwork_url: Some(meta.artwork_url.clone()),
-                            artist_name: Some(meta.artist_name.clone()),
-                            progress: Some(100),
-                            error: None,
-                            created_at: None,
-                        };
-                        if let Err(e) = db.lock().unwrap().add_download_record(&record) {
-                            eprintln!("[record] Failed to save download record: {}", e);
-                        }
+                    let file_meta = std::fs::metadata(&file_path).ok();
+                    let file_name = Path::new(&file_path)
+                        .file_stem()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(&appid)
+                        .to_string();
+                    let meta = result.metadata.clone();
+                    let record = DownloadRecord {
+                        id: None,
+                        job_id: Some(job_id_for_task.clone()),
+                        app_name: meta
+                            .as_ref()
+                            .map(|item| item.bundle_display_name.clone())
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or(file_name),
+                        app_id: appid.clone(),
+                        bundle_id: meta.as_ref().map(|item| item.bundle_id.clone()).filter(|value| !value.is_empty()),
+                        version: meta
+                            .as_ref()
+                            .map(|item| item.bundle_short_version_string.clone())
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| app_ver_id.clone()),
+                        account_email: account_email.clone(),
+                        account_region: None,
+                        download_date: Some(Utc::now().to_rfc3339()),
+                        status: "completed".to_string(),
+                        file_size: file_meta.map(|info| info.len() as i64),
+                        file_path: Some(file_path.clone()),
+                        install_url: None,
+                        artwork_url: meta.as_ref().map(|item| item.artwork_url.clone()).filter(|value| !value.is_empty()),
+                        artist_name: meta.as_ref().map(|item| item.artist_name.clone()).filter(|value| !value.is_empty()),
+                        progress: Some(100),
+                        error: None,
+                        created_at: None,
+                    };
+                    if let Err(e) = db.lock().unwrap().add_download_record(&record) {
+                        eprintln!("[record] Failed to save download record: {}", e);
                     }
                 } else {
                     let message = "下载完成，但未找到产物文件".to_string();
@@ -864,16 +1134,32 @@ async fn get_job_info(
     } else {
         snapshot.install_url.clone()
     };
+    let download_url = if snapshot.status == "ready" {
+        Some(format!(
+            "{}/api/download-file?jobId={}",
+            build_base_url(&req),
+            urlencoding::encode(&query.jobId)
+        ))
+    } else {
+        None
+    };
+    let file_size = snapshot
+        .file_path
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .map(|meta| meta.len());
 
     HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
         "jobId": snapshot.job_id,
         "status": snapshot.status,
         "stage": snapshot.stage,
         "progress": snapshot.progress,
+        "downloadUrl": download_url,
         "installUrl": install_url,
         "error": snapshot.error,
         "metadata": snapshot.metadata,
         "filePath": snapshot.file_path,
+        "fileSize": file_size,
     })))
 }
 
@@ -978,7 +1264,7 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
 // 下载 IPA
 async fn download_ipa(
     req: web::Json<DownloadRequest>,
-    _data: web::Data<AppState>,
+    data: web::Data<AppState>,
 ) -> impl Responder {
     // 验证 token
     let accounts = ACCOUNTS.read().await;
@@ -992,8 +1278,8 @@ async fn download_ipa(
     drop(accounts);
 
     // 创建下载目录
-    let download_dir = "../downloads";
-    if tokio::fs::create_dir_all(download_dir).await.is_err() {
+    let download_dir = data.downloads_dir.clone();
+    if tokio::fs::create_dir_all(&download_dir).await.is_err() {
         return HttpResponse::InternalServerError()
             .json(ApiResponse::<String>::error("创建下载目录失败".to_string()));
     }
@@ -1003,7 +1289,7 @@ async fn download_ipa(
 
     // 解析 URL 获取文件名
     let filename = url.split("/").last().unwrap_or("app.ipa");
-    let filepath = format!("{}/{}", download_dir, filename);
+    let filepath = download_dir.join(filename).to_string_lossy().to_string();
 
     // 开始下载
     match download_file_with_progress(url, &filepath).await {
@@ -1686,7 +1972,10 @@ async fn admin_login(
     let username = req.username.trim();
     let password = req.password.trim();
 
+    log::info!("[auth:login] attempt username={}", username);
+
     if username.is_empty() || password.is_empty() {
+        log::warn!("[auth:login] rejected: empty username or password");
         return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
             "用户名和密码不能为空".to_string(),
         ));
@@ -1695,6 +1984,7 @@ async fn admin_login(
     let db = match data.db.lock() {
         Ok(db) => db,
         Err(_) => {
+            log::error!("[auth:login] failed to acquire db lock");
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
                 "认证服务暂时不可用".to_string(),
             ))
@@ -1704,10 +1994,12 @@ async fn admin_login(
     let user = match db.get_admin_user(username) {
         Ok(Some(user)) => user,
         Ok(None) => {
+            log::warn!("[auth:login] user not found: {}", username);
             return HttpResponse::Unauthorized()
                 .json(ApiResponse::<String>::error("用户名或密码错误".to_string()))
         }
         Err(e) => {
+            log::error!("[auth:login] db error looking up user {}: {}", username, e);
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
                 "查询管理员失败: {}",
                 e
@@ -1716,21 +2008,30 @@ async fn admin_login(
     };
 
     if user.password_hash != hash_password(password) {
+        log::warn!("[auth:login] wrong password for user: {}", username);
         return HttpResponse::Unauthorized()
             .json(ApiResponse::<String>::error("用户名或密码错误".to_string()));
     }
 
     let token = Uuid::new_v4().to_string();
     if let Err(e) = db.cleanup_expired_sessions() {
-        log::warn!("清理过期登录态失败: {}", e);
+        log::warn!("[auth:login] cleanup expired sessions failed: {}", e);
     }
 
     if let Err(e) = db.create_session(&token, &user.username, &session_expires_at()) {
+        log::error!("[auth:login] create session failed for {}: {}", username, e);
         return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
             "创建登录态失败: {}",
             e
         )));
     }
+
+    log::info!(
+        "[auth:login] success user={} is_default={} token={}..",
+        user.username,
+        user.is_default,
+        &token[..8]
+    );
 
     HttpResponse::Ok()
         .cookie(build_session_cookie(&token))
@@ -1766,6 +2067,13 @@ async fn change_password(
     req: web::Json<ChangePasswordRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
+    log::info!(
+        "[auth:change-pwd] user={} new_username={:?} session={}..",
+        admin.username,
+        req.new_username,
+        &admin.session_token[..8]
+    );
+
     if req.new_password.trim().is_empty() {
         return HttpResponse::BadRequest()
             .json(ApiResponse::<String>::error("新密码不能为空".to_string()));
@@ -1780,6 +2088,7 @@ async fn change_password(
     let db = match data.db.lock() {
         Ok(db) => db,
         Err(_) => {
+            log::error!("[auth:change-pwd] db lock failed for user={}", admin.username);
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
                 "认证服务暂时不可用".to_string(),
             ))
@@ -1789,10 +2098,12 @@ async fn change_password(
     let user = match db.get_admin_user(&admin.username) {
         Ok(Some(user)) => user,
         Ok(None) => {
+            log::warn!("[auth:change-pwd] user not found: {}", admin.username);
             return HttpResponse::Unauthorized()
                 .json(ApiResponse::<String>::error("管理员账号不存在".to_string()))
         }
         Err(e) => {
+            log::error!("[auth:change-pwd] db error for {}: {}", admin.username, e);
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
                 "查询管理员失败: {}",
                 e
@@ -1801,31 +2112,45 @@ async fn change_password(
     };
 
     if user.password_hash != hash_password(&req.current_password) {
+        log::warn!("[auth:change-pwd] wrong current password for user={}", admin.username);
         return HttpResponse::BadRequest()
             .json(ApiResponse::<String>::error("当前密码不正确".to_string()));
     }
 
-    if let Err(e) =
-        db.update_admin_password(&admin.username, &hash_password(&req.new_password), false)
-    {
-        return HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("修改密码失败: {}", e)));
-    }
+    // Determine final username before any DB writes
+    let new_username = req
+        .new_username
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != admin.username);
 
-    let final_username = if let Some(new_name) = &req.new_username {
-        let trimmed = new_name.trim();
-        if !trimmed.is_empty() && trimmed != admin.username {
-            if let Err(e) = db.rename_admin_user(&admin.username, trimmed) {
-                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("修改用户名失败: {}", e),
-                ));
-            }
-            trimmed.to_string()
-        } else {
-            admin.username.clone()
+    // Atomic: update password + rename in one transaction
+    let final_username = match db.change_password_and_rename(
+        &admin.username,
+        &hash_password(&req.new_password),
+        false,
+        new_username,
+    ) {
+        Ok(name) => {
+            log::info!(
+                "[auth:change-pwd] success user={} -> {} is_default=false",
+                admin.username,
+                name
+            );
+            name
         }
-    } else {
-        admin.username.clone()
+        Err(e) => {
+            log::error!(
+                "[auth:change-pwd] transaction failed for {}: {}",
+                admin.username,
+                e
+            );
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!(
+                    "修改密码/用户名失败: {}",
+                    e
+                )));
+        }
     };
 
     HttpResponse::Ok().json(ApiResponse::success(AuthUserPayload {
@@ -2119,14 +2444,194 @@ async fn delete_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> i
 // ============ 下载记录端点 ============
 
 // 获取所有下载记录
-async fn get_download_records(data: web::Data<AppState>) -> impl Responder {
+async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
+    {
+        let db = data.db.lock().unwrap();
+        sync_download_records_from_filesystem(&db, &data.downloads_dir);
+    }
+
     match data.db.lock().unwrap().get_all_download_records() {
-        Ok(records) => HttpResponse::Ok().json(ApiResponse::success(records)),
+        Ok(records) => {
+            let items = records
+                .into_iter()
+                .map(|record| {
+                    let file_exists = record
+                        .file_path
+                        .as_ref()
+                        .map(|path| Path::new(path).exists())
+                        .unwrap_or(false);
+                    let record_id = record.id;
+                    let download_url = record_id.map(|id| build_record_download_url(&req, id));
+                    let install_url = record_id.and_then(|id| build_record_install_url(&req, &record, id));
+
+                    DownloadRecordView {
+                        id: record.id,
+                        job_id: record.job_id,
+                        app_name: record.app_name,
+                        app_id: record.app_id,
+                        bundle_id: record.bundle_id,
+                        version: record.version,
+                        account_email: record.account_email,
+                        account_region: record.account_region,
+                        download_date: record.download_date,
+                        status: record.status,
+                        file_size: record.file_size,
+                        file_path: record.file_path,
+                        download_url,
+                        install_url,
+                        artwork_url: record.artwork_url,
+                        artist_name: record.artist_name,
+                        progress: record.progress,
+                        error: record.error,
+                        created_at: record.created_at,
+                        file_exists,
+                    }
+                })
+                .collect::<Vec<_>>();
+
+            HttpResponse::Ok().json(ApiResponse::success(items))
+        }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
             "获取下载记录失败: {}",
             e
         ))),
     }
+}
+
+async fn download_record_file(
+    path: web::Path<i64>,
+    data: web::Data<AppState>,
+) -> Result<fs::NamedFile, Error> {
+    let id = path.into_inner();
+    let record = data
+        .db
+        .lock()
+        .unwrap()
+        .get_download_record(id)
+        .map_err(ErrorInternalServerError)?
+        .ok_or_else(|| ErrorNotFound("记录不存在"))?;
+    let file_path = record
+        .file_path
+        .clone()
+        .ok_or_else(|| ErrorNotFound("记录未保存文件路径"))?;
+    let path = PathBuf::from(&file_path);
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download.ipa")
+        .to_string();
+
+    Ok(fs::NamedFile::open_async(path)
+        .await
+        .map_err(ErrorNotFound)?
+        .set_content_disposition(ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(file_name)],
+        }))
+}
+
+async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
+    let records = {
+        let db = data.db.lock().unwrap();
+        sync_download_records_from_filesystem(&db, &data.downloads_dir);
+        db.get_all_download_records().unwrap_or_default()
+    };
+
+    let mut record_by_path = HashMap::new();
+    for record in records {
+        if let Some(path) = record.file_path.clone() {
+            record_by_path.insert(path, record);
+        }
+    }
+
+    let items = scan_download_artifacts(&data.downloads_dir)
+        .into_iter()
+        .map(|artifact| {
+            let path_string = artifact.path.to_string_lossy().to_string();
+            let record = record_by_path.get(&path_string);
+            let fallback_name = artifact.file_name.trim_end_matches(".ipa").to_string();
+            let download_url = format!("{}/api/ipa-files/{}/download", build_base_url(&req), artifact.id);
+            let install_url = record.and_then(|record| {
+                let record_id = record.id?;
+                build_record_install_url(&req, record, record_id)
+            });
+
+            IpaArtifactView {
+                id: artifact.id,
+                file_name: artifact.file_name,
+                file_size: artifact.file_size,
+                file_path: path_string,
+                modified_at: artifact.modified_at.map(|dt| dt.to_rfc3339()),
+                app_name: record
+                    .map(|item| item.app_name.clone())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(fallback_name),
+                app_id: record
+                    .map(|item| item.app_id.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                bundle_id: record.and_then(|item| item.bundle_id.clone()),
+                version: record.and_then(|item| item.version.clone()),
+                account_email: record.map(|item| item.account_email.clone()),
+                account_region: record.and_then(|item| item.account_region.clone()),
+                artwork_url: record.and_then(|item| item.artwork_url.clone()),
+                artist_name: record.and_then(|item| item.artist_name.clone()),
+                record_id: record.and_then(|item| item.id),
+                download_url,
+                install_url,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    HttpResponse::Ok().json(ApiResponse::success(items))
+}
+
+async fn download_ipa_file(
+    path: web::Path<String>,
+    data: web::Data<AppState>,
+) -> Result<fs::NamedFile, Error> {
+    let artifact_id = path.into_inner();
+    let file_path = resolve_artifact_path(&data.downloads_dir, &artifact_id)
+        .ok_or_else(|| ErrorNotFound("IPA 文件不存在"))?;
+    let file_name = file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("download.ipa")
+        .to_string();
+
+    Ok(fs::NamedFile::open_async(file_path)
+        .await
+        .map_err(ErrorNotFound)?
+        .set_content_disposition(ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(file_name)],
+        }))
+}
+
+async fn delete_ipa_file(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+    let artifact_id = path.into_inner();
+    let file_path = match resolve_artifact_path(&data.downloads_dir, &artifact_id) {
+        Some(path) => path,
+        None => {
+            return HttpResponse::NotFound()
+                .json(ApiResponse::<String>::error("IPA 文件不存在".to_string()))
+        }
+    };
+
+    if let Err(error) = tokio::fs::remove_file(&file_path).await {
+        return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+            "删除文件失败: {}",
+            error
+        )));
+    }
+
+    let file_path_string = file_path.to_string_lossy().to_string();
+    let _ = data
+        .db
+        .lock()
+        .unwrap()
+        .delete_download_record_by_file_path(&file_path_string);
+
+    HttpResponse::Ok().json(ApiResponse::success("IPA 已删除".to_string()))
 }
 
 // 删除下载记录
@@ -2140,13 +2645,21 @@ async fn delete_download_record(path: web::Path<i64>, data: web::Data<AppState>)
     }
 }
 
+async fn clear_download_records(data: web::Data<AppState>) -> impl Responder {
+    match data.db.lock().unwrap().clear_all_download_records() {
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("记录已清空".to_string())),
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("清空记录失败: {}", e))),
+    }
+}
+
 // 清理服务器上的下载文件
-async fn cleanup_downloads() -> impl Responder {
-    let jobs_dir = std::path::Path::new("../downloads/jobs");
+async fn cleanup_downloads(data: web::Data<AppState>) -> impl Responder {
+    let jobs_dir = data.downloads_dir.join("jobs");
     let mut cleaned = 0i64;
     let mut freed_bytes = 0u64;
 
-    if let Ok(mut entries) = tokio::fs::read_dir(jobs_dir).await {
+    if let Ok(mut entries) = tokio::fs::read_dir(&jobs_dir).await {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.is_dir() {
@@ -2256,9 +2769,14 @@ async fn main() -> std::io::Result<()> {
     env_logger::init();
 
     // 初始化数据库
-    let db_path = "../data/ipa-webtool.db";
-    log::info!("Initializing database at: {}", db_path);
-    let db = Database::new(db_path).unwrap_or_else(|e| {
+    let project_root = resolve_project_root();
+    let data_dir = project_root.join("data");
+    let downloads_dir = project_root.join("downloads");
+    let db_path = data_dir.join("ipa-webtool.db");
+    log::info!("Initializing database at: {}", db_path.display());
+    std::fs::create_dir_all(&data_dir).ok();
+    std::fs::create_dir_all(&downloads_dir).ok();
+    let db = Database::new(db_path.to_string_lossy().as_ref()).unwrap_or_else(|e| {
         log::error!("Failed to initialize database: {}", e);
         panic!("Database initialization failed: {}", e);
     });
@@ -2267,12 +2785,16 @@ async fn main() -> std::io::Result<()> {
     let db_arc = Arc::new(Mutex::new(db));
 
     // 初始化下载管理器
-    let download_manager = Arc::new(DownloadManager::new(Arc::clone(&db_arc)));
+    let download_manager = Arc::new(DownloadManager::new(
+        Arc::clone(&db_arc),
+        downloads_dir.clone(),
+    ));
 
     let app_state = web::Data::new(AppState {
         db: db_arc,
         download_manager: download_manager.clone(),
         job_store: JobStore::new(),
+        downloads_dir,
     });
 
     let bind_address = "0.0.0.0:8080";
@@ -2318,7 +2840,12 @@ async fn main() -> std::io::Result<()> {
                             .route("/batch-tasks/{id}", web::get().to(get_batch_task))
                             .route("/batch-tasks/{id}", web::delete().to(delete_batch_task))
                             .route("/download-records", web::get().to(get_download_records))
+                            .route("/download-records", web::delete().to(clear_download_records))
                             .route("/download-records/{id}", web::delete().to(delete_download_record))
+                            .route("/download-records/{id}/file", web::get().to(download_record_file))
+                            .route("/ipa-files", web::get().to(get_ipa_files))
+                            .route("/ipa-files/{id}/download", web::get().to(download_ipa_file))
+                            .route("/ipa-files/{id}", web::delete().to(delete_ipa_file))
                             .route("/cleanup-downloads", web::post().to(cleanup_downloads))
                             .route("/subscriptions", web::get().to(get_subscriptions))
                             .route("/subscriptions", web::post().to(add_subscription))

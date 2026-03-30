@@ -279,6 +279,11 @@ const handleChangePassword = async () => {
 
     // Properly logout: clear server session + cookie + local state
     await appStore.logoutAdmin()
+
+    // Reload the page to force App.vue to re-check auth state.
+    // Without this, the local authState in App.vue stays stale and
+    // the user sees a blank/broken state instead of the login form.
+    window.location.reload()
   } catch (e) {
     ElMessage.error(e?.message || '修改密码失败')
   } finally {

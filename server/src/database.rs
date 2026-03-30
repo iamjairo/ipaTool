@@ -61,6 +61,7 @@ pub struct EncryptionKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadRecord {
     pub id: Option<i64>,
+    pub job_id: Option<String>,
     pub app_name: String,
     pub app_id: String,
     pub bundle_id: Option<String>,
@@ -70,6 +71,7 @@ pub struct DownloadRecord {
     pub download_date: Option<String>,
     pub status: String,
     pub file_size: Option<i64>,
+    pub file_path: Option<String>,
     pub install_url: Option<String>,
     pub artwork_url: Option<String>,
     pub artist_name: Option<String>,
@@ -172,6 +174,7 @@ impl Database {
             "
             CREATE TABLE IF NOT EXISTS download_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT,
                 app_name TEXT NOT NULL,
                 app_id TEXT NOT NULL,
                 bundle_id TEXT,
@@ -181,6 +184,7 @@ impl Database {
                 download_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                 status TEXT DEFAULT 'completed',
                 file_size INTEGER,
+                file_path TEXT,
                 install_url TEXT,
                 artwork_url TEXT,
                 artist_name TEXT,
@@ -332,6 +336,19 @@ impl Database {
         let has_error = table_info
             .iter()
             .any(|(_, name, _, _, _, _)| name == "error");
+        let has_job_id = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "job_id");
+        let has_file_path = table_info
+            .iter()
+            .any(|(_, name, _, _, _, _)| name == "file_path");
+
+        if !has_job_id {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN job_id TEXT", []);
+        }
+        if !has_file_path {
+            let _ = conn.execute("ALTER TABLE download_records ADD COLUMN file_path TEXT", []);
+        }
 
         if !has_progress {
             let _ = conn.execute(
@@ -383,6 +400,15 @@ impl Database {
             );
         }
 
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_download_records_job_id ON download_records(job_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_download_records_file_path ON download_records(file_path)",
+            [],
+        );
+
         let _ = conn.execute("DELETE FROM encryption_keys WHERE key_id IS NULL", []);
 
         Ok(())
@@ -395,15 +421,18 @@ impl Database {
     }
 
     fn seed_default_admin(conn: &Connection) -> Result<()> {
-        let existing = conn
+        // Only seed if no admin users exist at all (first run).
+        // If the user renamed 'admin' to something else, we must NOT recreate 'admin'.
+        let any_admin: Option<i64> = conn
             .query_row(
-                "SELECT id FROM admin_users WHERE username = ?",
-                params!["admin"],
-                |row| row.get::<_, i64>(0),
+                "SELECT id FROM admin_users LIMIT 1",
+                [],
+                |row| row.get(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
 
-        if existing.is_none() {
+        if any_admin.is_none() {
             conn.execute(
                 "INSERT INTO admin_users (username, password_hash, is_default) VALUES (?, ?, ?)",
                 params!["admin", Self::hash_password("admin"), true],
@@ -470,6 +499,48 @@ impl Database {
             params![new_username, old_username],
         )?;
         Ok(())
+    }
+
+    /// Atomic password change + optional rename in a single transaction.
+    /// Returns the final username (new or unchanged).
+    /// When renaming, existing sessions are deleted (user will re-login anyway).
+    pub fn change_password_and_rename(
+        &self,
+        username: &str,
+        new_password_hash: &str,
+        is_default: bool,
+        new_username: Option<&str>,
+    ) -> Result<String> {
+        let conn = self.connection.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+
+        // Update password
+        tx.execute(
+            "UPDATE admin_users SET password_hash = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?",
+            params![new_password_hash, is_default, username],
+        )?;
+
+        let final_username = match new_username {
+            Some(new_name) => {
+                // Sessions FK references admin_users(username) — can't UPDATE to
+                // a value that doesn't exist yet. Since the user will be logged
+                // out after password change anyway, just drop their sessions.
+                tx.execute(
+                    "DELETE FROM sessions WHERE username = ?",
+                    params![username],
+                )?;
+                // Now safe to rename admin_users
+                tx.execute(
+                    "UPDATE admin_users SET username = ?, updated_at = CURRENT_TIMESTAMP WHERE username = ?",
+                    params![new_name, username],
+                )?;
+                new_name.to_string()
+            }
+            None => username.to_string(),
+        };
+
+        tx.commit()?;
+        Ok(final_username)
     }
 
     pub fn delete_admin_user(&self, username: &str) -> Result<()> {
@@ -730,11 +801,43 @@ impl Database {
 
     pub fn add_download_record(&self, record: &DownloadRecord) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
+        if let Some(existing_id) = Self::find_existing_download_record_id(&conn, record)? {
+            conn.execute(
+                "UPDATE download_records SET
+                 job_id = ?, app_name = ?, app_id = ?, bundle_id = ?, version = ?,
+                 account_email = ?, account_region = ?, status = ?, file_size = ?, file_path = ?,
+                 install_url = ?, artwork_url = ?, artist_name = ?, progress = ?, error = ?,
+                 download_date = COALESCE(?, download_date)
+                 WHERE id = ?",
+                params![
+                    record.job_id,
+                    record.app_name,
+                    record.app_id,
+                    record.bundle_id,
+                    record.version,
+                    record.account_email,
+                    record.account_region,
+                    record.status,
+                    record.file_size,
+                    record.file_path,
+                    record.install_url,
+                    record.artwork_url,
+                    record.artist_name,
+                    record.progress,
+                    record.error,
+                    record.download_date,
+                    existing_id,
+                ],
+            )?;
+            return Ok(existing_id);
+        }
+
         conn.execute(
             "INSERT INTO download_records 
-             (app_name, app_id, bundle_id, version, account_email, account_region, status, file_size, install_url, artwork_url, artist_name, progress, error) 
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (job_id, app_name, app_id, bundle_id, version, account_email, account_region, status, file_size, file_path, install_url, artwork_url, artist_name, progress, error, download_date) 
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))",
             params![
+                record.job_id,
                 record.app_name,
                 record.app_id,
                 record.bundle_id,
@@ -743,44 +846,121 @@ impl Database {
                 record.account_region,
                 record.status,
                 record.file_size,
+                record.file_path,
                 record.install_url,
                 record.artwork_url,
                 record.artist_name,
                 record.progress,
                 record.error,
+                record.download_date,
             ],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
+    fn find_existing_download_record_id(
+        conn: &Connection,
+        record: &DownloadRecord,
+    ) -> Result<Option<i64>> {
+        if let Some(job_id) = record.job_id.as_deref() {
+            let existing = conn
+                .query_row(
+                    "SELECT id FROM download_records WHERE job_id = ? ORDER BY id DESC LIMIT 1",
+                    params![job_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing.is_some() {
+                return Ok(existing);
+            }
+        }
+
+        if let Some(file_path) = record.file_path.as_deref() {
+            let existing = conn
+                .query_row(
+                    "SELECT id FROM download_records WHERE file_path = ? ORDER BY id DESC LIMIT 1",
+                    params![file_path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if existing.is_some() {
+                return Ok(existing);
+            }
+        }
+
+        Ok(None)
+    }
+
     pub fn get_all_download_records(&self) -> Result<Vec<DownloadRecord>> {
         let conn = self.connection.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT * FROM download_records ORDER BY download_date DESC")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, job_id, app_name, app_id, bundle_id, version, account_email, account_region,
+                    download_date, status, file_size, file_path, install_url, artwork_url,
+                    artist_name, progress, error, created_at
+             FROM download_records
+             ORDER BY download_date DESC, id DESC",
+        )?;
         let records = stmt
             .query_map([], |row| {
                 Ok(DownloadRecord {
                     id: row.get(0)?,
-                    app_name: row.get(1)?,
-                    app_id: row.get(2)?,
-                    bundle_id: row.get(3)?,
-                    version: row.get(4)?,
-                    account_email: row.get(5)?,
-                    account_region: row.get(6)?,
-                    download_date: row.get(7)?,
-                    status: row.get(8)?,
-                    file_size: row.get(9)?,
-                    install_url: row.get(10)?,
-                    artwork_url: row.get(11)?,
-                    artist_name: row.get(12)?,
-                    progress: row.get(13)?,
-                    error: row.get(14)?,
-                    created_at: row.get(15)?,
+                    job_id: row.get(1)?,
+                    app_name: row.get(2)?,
+                    app_id: row.get(3)?,
+                    bundle_id: row.get(4)?,
+                    version: row.get(5)?,
+                    account_email: row.get(6)?,
+                    account_region: row.get(7)?,
+                    download_date: row.get(8)?,
+                    status: row.get(9)?,
+                    file_size: row.get(10)?,
+                    file_path: row.get(11)?,
+                    install_url: row.get(12)?,
+                    artwork_url: row.get(13)?,
+                    artist_name: row.get(14)?,
+                    progress: row.get(15)?,
+                    error: row.get(16)?,
+                    created_at: row.get(17)?,
                 })
             })?
             .filter_map(|r| r.ok())
             .collect();
         Ok(records)
+    }
+
+    pub fn get_download_record(&self, id: i64) -> Result<Option<DownloadRecord>> {
+        let conn = self.connection.lock().unwrap();
+        conn.query_row(
+            "SELECT id, job_id, app_name, app_id, bundle_id, version, account_email, account_region,
+                    download_date, status, file_size, file_path, install_url, artwork_url,
+                    artist_name, progress, error, created_at
+             FROM download_records
+             WHERE id = ? LIMIT 1",
+            params![id],
+            |row| {
+                Ok(DownloadRecord {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    app_name: row.get(2)?,
+                    app_id: row.get(3)?,
+                    bundle_id: row.get(4)?,
+                    version: row.get(5)?,
+                    account_email: row.get(6)?,
+                    account_region: row.get(7)?,
+                    download_date: row.get(8)?,
+                    status: row.get(9)?,
+                    file_size: row.get(10)?,
+                    file_path: row.get(11)?,
+                    install_url: row.get(12)?,
+                    artwork_url: row.get(13)?,
+                    artist_name: row.get(14)?,
+                    progress: row.get(15)?,
+                    error: row.get(16)?,
+                    created_at: row.get(17)?,
+                })
+            },
+        )
+        .optional()
     }
 
     pub fn delete_download_record(&self, id: i64) -> Result<()> {
@@ -795,7 +975,7 @@ impl Database {
             "UPDATE download_records SET 
              app_name = ?, app_id = ?, bundle_id = ?, version = ?, 
              account_email = ?, account_region = ?, status = ?, 
-             file_size = ?, install_url = ?, artwork_url = ?, 
+             file_size = ?, file_path = ?, install_url = ?, artwork_url = ?, 
              artist_name = ?, progress = ?, error = ?
              WHERE id = ?",
             params![
@@ -807,6 +987,7 @@ impl Database {
                 updates.account_region,
                 updates.status,
                 updates.file_size,
+                updates.file_path,
                 updates.install_url,
                 updates.artwork_url,
                 updates.artist_name,
@@ -814,6 +995,15 @@ impl Database {
                 updates.error,
                 id,
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_download_record_by_file_path(&self, file_path: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "DELETE FROM download_records WHERE file_path = ?",
+            params![file_path],
         )?;
         Ok(())
     }

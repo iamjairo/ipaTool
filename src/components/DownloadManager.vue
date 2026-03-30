@@ -104,10 +104,10 @@
               :label="account.email"
               :value="index"
             >
-              <div class="flex items-center justify-between w-full">
-                <span class="flex-1 truncate">{{ account.email }}</span>
+              <div class="account-option-row">
+                <span class="account-option-email">{{ account.email }}</span>
                 <span
-                  class="region-badge-mini ml-2"
+                  class="region-badge-mini"
                   :class="`region-${(account.region || 'US').toLowerCase()}`"
                 >
                   {{ getRegionLabel(account.region || 'US') }}
@@ -388,7 +388,7 @@
             <template #icon>
               <el-icon><Download /></el-icon>
             </template>
-            {{ downloading ? '处理中...' : '下载并自动安装' }}
+            {{ downloading ? '处理中...' : '下载到服务器' }}
           </el-button>
 
 
@@ -510,10 +510,9 @@
           <pre class="bg-black rounded-lg p-3 text-green-400 text-xs whitespace-pre-wrap font-mono">{{ logs }}</pre>
         </el-scrollbar>
         
-        <!-- Install Button -->
         <div
-          v-if="showInstallButton && downloadInstallUrl"
-          class="mt-4"
+          v-if="showActionButtons && (downloadReadyUrl || downloadInstallUrl)"
+          class="mt-4 space-y-3"
         >
           <!-- Environment Warning -->
           <div
@@ -545,25 +544,40 @@
             </div>
           </div>
           
-          <el-button 
-            type="success" 
-            size="large" 
-            class="w-full"
-            @click="installDownloadedIpa"
-          >
-            <template #icon>
-              <el-icon><Download /></el-icon>
-            </template>
-            点击安装到设备
-          </el-button>
-          <p class="text-xs text-gray-500 dark:text-gray-400 mt-2 text-center">
-            请在 iOS 设备的 Safari 中打开此页面并点击安装
+          <div class="grid gap-3 sm:grid-cols-2">
+            <el-button
+              v-if="downloadReadyUrl"
+              type="primary"
+              size="large"
+              class="w-full"
+              @click="downloadCompletedIpa"
+            >
+              <template #icon>
+                <el-icon><Download /></el-icon>
+              </template>
+              下载 IPA{{ downloadReadyFileSize ? `（${formatFileSize(downloadReadyFileSize)}）` : '' }}
+            </el-button>
+            <el-button
+              v-if="downloadInstallUrl"
+              type="success"
+              size="large"
+              class="w-full"
+              @click="installDownloadedIpa"
+            >
+              <template #icon>
+                <el-icon><Download /></el-icon>
+              </template>
+              安装到设备
+            </el-button>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
+            下载和安装已分离，请按需手动操作
           </p>
           <p
-            v-if="!isHttps"
+            v-if="downloadInstallUrl && !isHttps"
             class="text-xs text-orange-600 dark:text-orange-400 mt-1 text-center"
           >
-            ⚠️ 非 HTTPS 环境可能无法安装，点击按钮查看选项
+            ⚠️ 非 HTTPS 环境可能无法安装
           </p>
         </div>
       </el-card>
@@ -707,9 +721,11 @@ const uploadResult = ref({
   installUrl: ''
 })
 
-// Install state
+// Download/install state
+const downloadReadyUrl = ref('')
+const downloadReadyFileSize = ref(0)
 const downloadInstallUrl = ref('')
-const showInstallButton = ref(false)
+const showActionButtons = ref(false)
 
 // HTTPS detection
 const isHttps = ref(false)
@@ -1081,6 +1097,10 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     progressPercent.value = 0
     progressStage.value = '准备中…'
     logs.value = ''
+    downloadReadyUrl.value = ''
+    downloadReadyFileSize.value = 0
+    downloadInstallUrl.value = ''
+    showActionButtons.value = false
     addLog('[进度] 创建下载任务…')
 
     addLog(`[进度] 使用账号 ${account.email} 发起任务，token=${String(account.token).slice(0, 8)}…`)
@@ -1179,27 +1199,23 @@ const pollJobStatus = (jobId, queueItem) => {
 
       if (snapshot.status === 'ready') {
         clearInterval(timer)
-        const a = document.createElement('a')
-        a.href = new URL(`${API_BASE}/download-file?jobId=${encodeURIComponent(jobId)}`, window.location.origin).toString()
-        a.rel = 'noopener'
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-
         progressPercent.value = 100
-        progressStage.value = '已开始下载'
-        addLog('[进度] 文件下载已开始')
+        progressStage.value = '下载已完成'
+        addLog('[进度] 文件已保存到服务器，可手动下载或安装')
 
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, {
           status: 'completed',
-          progress: 100
+          progress: 100,
+          downloadUrl: snapshot.downloadUrl,
+          installUrl: snapshot.installUrl,
+          fileSize: snapshot.fileSize || 0
         })
 
-        if (snapshot.installUrl) {
-          downloadInstallUrl.value = snapshot.installUrl
-          showInstallButton.value = true
-        }
+        downloadReadyUrl.value = snapshot.downloadUrl || ''
+        downloadReadyFileSize.value = snapshot.fileSize || 0
+        downloadInstallUrl.value = snapshot.installUrl || ''
+        showActionButtons.value = !!(snapshot.downloadUrl || snapshot.installUrl)
       } else if (snapshot.status === 'failed') {
         clearInterval(timer)
         addLog(`[失败] ${snapshot.error || '任务失败'}`)
@@ -1269,17 +1285,9 @@ const connectToSSE = (jobId, queueItem) => {
       }
       
       if (data.status === 'ready') {
-        progressStage.value = '准备下载文件…'
-        const a = document.createElement('a')
-        a.href = new URL(`${API_BASE}/download-file?jobId=${encodeURIComponent(jobId)}`, window.location.origin).toString()
-        a.rel = 'noopener'
-        document.body.appendChild(a)
-        a.click()
-        a.remove()
-        
         progressPercent.value = 100
-        progressStage.value = '已开始下载'
-        addLog('[进度] 文件下载已开始')
+        progressStage.value = '下载已完成'
+        addLog('[进度] 文件已保存到服务器，可手动下载或安装')
 
         // 更新队列项状态
         const appStore = useAppStore()
@@ -1316,11 +1324,22 @@ const connectToSSE = (jobId, queueItem) => {
         fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`, { credentials: 'include' })
           .then(res => res.json())
           .then(jobData => {
-            if (jobData.ok && jobData.data?.installUrl) {
-              addLog('[安装] 安装链接已生成')
-              // 显示安装按钮
-              downloadInstallUrl.value = jobData.data.installUrl
-              showInstallButton.value = true
+            if (jobData.ok && jobData.data) {
+              downloadReadyUrl.value = jobData.data.downloadUrl || ''
+              downloadReadyFileSize.value = jobData.data.fileSize || 0
+              downloadInstallUrl.value = jobData.data.installUrl || ''
+              showActionButtons.value = !!(jobData.data.downloadUrl || jobData.data.installUrl)
+              if (jobData.data.installUrl) {
+                addLog('[安装] 安装链接已生成')
+              }
+              const appStore = useAppStore()
+              appStore.updateQueueItem(jobId, {
+                status: 'completed',
+                progress: 100,
+                downloadUrl: jobData.data.downloadUrl,
+                installUrl: jobData.data.installUrl,
+                fileSize: jobData.data.fileSize || 0
+              })
             }
           })
           .catch(() => {
@@ -1428,18 +1447,7 @@ const installDownloadedIpa = async () => {
     )
 
     if (action === 'download') {
-      // 用户选择直接下载文件
-      ElMessage.info('正在准备下载...')
-      // 这里可以触发文件下载，需要从 jobId 获取文件
-      // 由于当前没有保存 jobId，我们提示用户
-      ElMessageBox.alert(
-        '请使用"直链下载"功能重新下载文件，或部署到 HTTPS 环境后再试。',
-        '提示',
-        {
-          type: 'info',
-          confirmButtonText: '我知道了'
-        }
-      )
+      downloadCompletedIpa()
     }
     // 如果用户选择取消，什么都不做
     return
@@ -1465,6 +1473,15 @@ const installDownloadedIpa = async () => {
       window.location.href = downloadInstallUrl.value
     }
   }
+}
+
+const downloadCompletedIpa = () => {
+  if (!downloadReadyUrl.value) {
+    ElMessage.warning('下载链接未生成')
+    return
+  }
+
+  window.open(downloadReadyUrl.value, '_blank', 'noopener')
 }
 
 const installUploadedIpa = async () => {
@@ -1524,6 +1541,18 @@ const installUploadedIpa = async () => {
   }
 }
 
+const formatFileSize = (bytes) => {
+  if (!bytes) return ''
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let unitIndex = 0
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024
+    unitIndex += 1
+  }
+  return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
+}
+
 onMounted(() => {
   loadAccounts()
   restoreStateFromStore()
@@ -1580,13 +1609,36 @@ onMounted(() => {
   font-size: 13px;
 }
 
+.account-quick-select :deep(.el-select-dropdown__item) {
+  overflow: hidden;
+}
+
+.account-option-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.account-option-email {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 迷你区域徽章 */
 .region-badge-mini {
   display: inline-flex;
-  height: 28px;
+  flex-shrink: 0;
+  max-width: 110px;
+  height: 20px;
+  line-height: 1;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.3px;
