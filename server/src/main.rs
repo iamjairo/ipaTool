@@ -838,6 +838,11 @@ fn persisted_inspection(record: &DownloadRecord) -> Option<IpaInspection> {
 }
 
 fn inspection_for_record(record: &DownloadRecord) -> Option<IpaInspection> {
+    // 优先读 DB 持久化结果，避免每次请求都重新 inspect ZIP
+    if let Some(cached) = persisted_inspection(record) {
+        return Some(cached);
+    }
+    // DB 没有，才做文件 inspect（用于 backfill）
     record
         .file_path
         .as_ref()
@@ -845,7 +850,6 @@ fn inspection_for_record(record: &DownloadRecord) -> Option<IpaInspection> {
         .filter(|path| path.exists())
         .as_deref()
         .and_then(inspect_existing_ipa)
-        .or_else(|| persisted_inspection(record))
 }
 
 fn sync_record_delivery(
@@ -3493,17 +3497,17 @@ async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> im
             let items = records
                 .into_iter()
                 .map(|record| {
-                    let file_path_buf = record.file_path.as_ref().map(PathBuf::from);
-                    let file_exists = file_path_buf
+                    let inspection = inspection_for_record(&record);
+                    let file_exists = record
+                        .file_path
                         .as_ref()
+                        .map(PathBuf::from)
                         .map(|path| path.exists())
                         .unwrap_or(false);
-                    let inspection = if file_exists {
-                        file_path_buf.as_deref().and_then(inspect_existing_ipa)
-                    } else {
-                        persisted_inspection(&record)
-                    };
-                    sync_record_delivery(&db, &record, inspection.as_ref(), file_exists);
+                    // backfill only if DB was empty and we got a fresh inspect
+                    if inspection.is_some() && record.inspection_json.is_none() {
+                        sync_record_delivery(&db, &record, inspection.as_ref(), file_exists);
+                    }
                     let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
                     let record_id = record.id;
                     let download_url = record_id.map(|id| build_record_download_url(&req, id));
@@ -3610,9 +3614,15 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
                 build_base_url(&req),
                 artifact.id
             );
-            let inspection = inspect_existing_ipa(&artifact.path);
+            let inspection = if let Some(record) = record {
+                inspection_for_record(record)
+            } else {
+                inspect_existing_ipa(&artifact.path)
+            };
             if let Some(record) = record {
-                sync_record_delivery(&db, record, inspection.as_ref(), true);
+                if inspection.is_some() && record.inspection_json.is_none() {
+                    sync_record_delivery(&db, record, inspection.as_ref(), true);
+                }
             }
             let decision = derive_delivery_decision(inspection.as_ref(), true);
             let install_url = if decision.ota_installable {
