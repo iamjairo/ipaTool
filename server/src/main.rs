@@ -2933,10 +2933,9 @@ async fn admin_login(
         }
         Err(e) => {
             log::error!("[auth:login] db error looking up user {}: {}", username, e);
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "查询管理员失败: {}",
-                e
-            )));
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("查询管理员失败: {}", e),
+            ));
         }
     };
 
@@ -3040,10 +3039,9 @@ async fn change_password(
         }
         Err(e) => {
             log::error!("[auth:change-pwd] db error for {}: {}", admin.username, e);
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "查询管理员失败: {}",
-                e
-            )));
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("查询管理员失败: {}", e),
+            ));
         }
     };
 

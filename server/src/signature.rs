@@ -59,8 +59,15 @@ pub struct IpaInspection {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct SignatureReplacement {
+    pub path: String,
+    pub signature_index: usize,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct SignatureApplyResult {
     pub applied_paths: Vec<String>,
+    pub replacements: Vec<SignatureReplacement>,
     pub warning: Option<String>,
 }
 
@@ -181,6 +188,27 @@ fn read_manifest_targets<R: Read + Seek>(
     Ok(Some(manifest_targets_from_value(&manifest)))
 }
 
+fn read_bundle_executable<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    app_bundle_name: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let info_path = format!("Payload/{}/Info.plist", app_bundle_name);
+    let info = match read_zip_plist(zip, &info_path) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+
+    let executable = match info {
+        Value::Dictionary(dict) => dict
+            .get("CFBundleExecutable")
+            .and_then(|value| value.as_string())
+            .map(|value| value.to_string()),
+        _ => None,
+    };
+
+    Ok(executable)
+}
+
 fn decode_signatures(
     signatures: &[Sinf],
 ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
@@ -190,21 +218,34 @@ fn decode_signatures(
         .collect()
 }
 
+fn sinf_basename(path: &str) -> Option<String> {
+    let file_name = path.rsplit('/').next()?;
+    Some(file_name.trim_end_matches(".sinf").to_string())
+}
+
 fn build_injection_plan(
     signatures: &[Sinf],
     manifest_targets: &ManifestTargets,
 ) -> Result<SignatureApplyResult, Box<dyn std::error::Error + Send + Sync>> {
-    let target_paths = ordered_unique_paths(
+    let primary_paths = ordered_unique_paths(manifest_targets.sinf_paths.iter().cloned());
+    let replication_paths = ordered_unique_paths(
         manifest_targets
-            .sinf_paths
+            .sinf_replication_paths
+            .iter()
+            .filter(|path| !primary_paths.contains(path))
+            .cloned(),
+    );
+    let target_paths = ordered_unique_paths(
+        primary_paths
             .iter()
             .cloned()
-            .chain(manifest_targets.sinf_replication_paths.iter().cloned()),
+            .chain(replication_paths.iter().cloned()),
     );
 
     if target_paths.is_empty() {
         return Ok(SignatureApplyResult {
             applied_paths: Vec::new(),
+            replacements: Vec::new(),
             warning: Some("包内未声明需要补齐的 .sinf 目标".to_string()),
         });
     }
@@ -212,6 +253,7 @@ fn build_injection_plan(
     if signatures.is_empty() {
         return Ok(SignatureApplyResult {
             applied_paths: Vec::new(),
+            replacements: Vec::new(),
             warning: Some(format!(
                 "包内声明了 {} 个 .sinf 目标，但 Apple 下载响应未返回任何真实 sinf",
                 target_paths.len()
@@ -220,35 +262,107 @@ fn build_injection_plan(
     }
 
     if signatures.len() == 1 {
+        let replacements = target_paths
+            .iter()
+            .cloned()
+            .map(|path| SignatureReplacement {
+                path,
+                signature_index: 0,
+            })
+            .collect::<Vec<_>>();
         return Ok(SignatureApplyResult {
             applied_paths: target_paths,
+            replacements,
             warning: None,
         });
     }
 
     if signatures.len() == target_paths.len() {
+        let replacements = target_paths
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, path)| SignatureReplacement {
+                path,
+                signature_index: index,
+            })
+            .collect::<Vec<_>>();
         return Ok(SignatureApplyResult {
             applied_paths: target_paths,
+            replacements,
             warning: None,
         });
     }
 
-    if signatures.len() == manifest_targets.sinf_paths.len()
-        && !manifest_targets.sinf_replication_paths.is_empty()
-    {
+    if signatures.len() == primary_paths.len() && !replication_paths.is_empty() {
+        let mut primary_name_to_index = std::collections::HashMap::new();
+        for (index, path) in primary_paths.iter().enumerate() {
+            let Some(base) = sinf_basename(path) else {
+                return Ok(SignatureApplyResult {
+                    applied_paths: Vec::new(),
+                    replacements: Vec::new(),
+                    warning: Some("存在无法解析 basename 的主 .sinf 路径，跳过注入".to_string()),
+                });
+            };
+            if primary_name_to_index.insert(base, index).is_some() {
+                return Ok(SignatureApplyResult {
+                    applied_paths: Vec::new(),
+                    replacements: Vec::new(),
+                    warning: Some(
+                        "主 SinfPaths 出现重复 basename，无法安全映射 replication 目标".to_string(),
+                    ),
+                });
+            }
+        }
+
+        let mut replacements = primary_paths
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, path)| SignatureReplacement {
+                path,
+                signature_index: index,
+            })
+            .collect::<Vec<_>>();
+
+        for path in replication_paths.iter().cloned() {
+            let Some(base) = sinf_basename(&path) else {
+                return Ok(SignatureApplyResult {
+                    applied_paths: Vec::new(),
+                    replacements: Vec::new(),
+                    warning: Some(format!(
+                        "replication 目标 {} 无法解析 basename，跳过注入",
+                        path
+                    )),
+                });
+            };
+            let Some(signature_index) = primary_name_to_index.get(&base).copied() else {
+                return Ok(SignatureApplyResult {
+                    applied_paths: Vec::new(),
+                    replacements: Vec::new(),
+                    warning: Some(format!(
+                        "replication 目标 {} 找不到同 basename 的主 SinfPath，跳过注入",
+                        path
+                    )),
+                });
+            };
+            replacements.push(SignatureReplacement {
+                path,
+                signature_index,
+            });
+        }
+
+        let applied_paths = replacements.iter().map(|item| item.path.clone()).collect();
         return Ok(SignatureApplyResult {
-            applied_paths: Vec::new(),
-            warning: Some(format!(
-                "Apple 返回了 {} 个 sinf，主 SinfPaths={}，但还存在 {} 个 replication 目标；当前无法安全推断一对多映射，跳过注入",
-                signatures.len(),
-                manifest_targets.sinf_paths.len(),
-                manifest_targets.sinf_replication_paths.len()
-            )),
+            applied_paths,
+            replacements,
+            warning: None,
         });
     }
 
     Ok(SignatureApplyResult {
         applied_paths: Vec::new(),
+        replacements: Vec::new(),
         warning: Some(format!(
             "Apple 返回 sinf 数量 ({}) 与包内声明目标数量 ({}) 不匹配，跳过注入",
             signatures.len(),
@@ -707,43 +821,56 @@ impl SignatureClient {
         let reader = Cursor::new(self.archive.clone());
         let mut zip = ZipArchive::new(reader)?;
         let app_bundle_name = find_app_bundle_name(&mut zip)?;
-        let Some(manifest_targets) = read_manifest_targets(&mut zip, &app_bundle_name)? else {
-            return Ok(SignatureApplyResult {
+        let apply_result = if let Some(manifest_targets) =
+            read_manifest_targets(&mut zip, &app_bundle_name)?
+        {
+            build_injection_plan(&self.signatures, &manifest_targets)?
+        } else if let Some(executable) = read_bundle_executable(&mut zip, &app_bundle_name)? {
+            if self.signatures.is_empty() {
+                SignatureApplyResult {
+                    applied_paths: Vec::new(),
+                    replacements: Vec::new(),
+                    warning: Some(
+                        "包内无 Manifest，且 Apple 下载响应未返回任何真实 sinf".to_string(),
+                    ),
+                }
+            } else {
+                let path = format!("SC_Info/{}.sinf", executable);
+                SignatureApplyResult {
+                    applied_paths: vec![path.clone()],
+                    replacements: vec![SignatureReplacement {
+                        path,
+                        signature_index: 0,
+                    }],
+                    warning: Some(
+                        "包内未找到 SC_Info/Manifest.plist，已按主 app 可执行文件回退注入首个 sinf"
+                            .to_string(),
+                    ),
+                }
+            }
+        } else {
+            SignatureApplyResult {
                 applied_paths: Vec::new(),
-                warning: Some("包内未找到 SC_Info/Manifest.plist，跳过 sinf 注入".to_string()),
-            });
+                replacements: Vec::new(),
+                warning: Some("包内未找到 SC_Info/Manifest.plist，且无法从 Info.plist 推断 sinf 路径，跳过注入".to_string()),
+            }
         };
 
-        let apply_result = build_injection_plan(&self.signatures, &manifest_targets)?;
         if apply_result.applied_paths.is_empty() {
             return Ok(apply_result);
         }
 
         let decoded_signatures = decode_signatures(&self.signatures)?;
-        let replacements = if decoded_signatures.len() == 1 {
-            apply_result
-                .applied_paths
-                .iter()
-                .map(|path| {
-                    (
-                        format!("Payload/{}/{}", app_bundle_name, path),
-                        decoded_signatures[0].clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        } else {
-            apply_result
-                .applied_paths
-                .iter()
-                .enumerate()
-                .map(|(index, path)| {
-                    (
-                        format!("Payload/{}/{}", app_bundle_name, path),
-                        decoded_signatures[index].clone(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        };
+        let replacements = apply_result
+            .replacements
+            .iter()
+            .map(|replacement| {
+                (
+                    format!("Payload/{}/{}", app_bundle_name, replacement.path),
+                    decoded_signatures[replacement.signature_index].clone(),
+                )
+            })
+            .collect::<Vec<_>>();
 
         replace_zip_entries(&mut self.archive, &replacements)?;
         Ok(apply_result)
@@ -766,4 +893,227 @@ pub fn read_zip(
     let file = File::open(path)?;
     let zip = ZipArchive::new(file)?;
     Ok(zip)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn sample_signatures(count: usize) -> Vec<Sinf> {
+        (0..count)
+            .map(|index| Sinf {
+                id: index.to_string(),
+                sinf: base64::engine::general_purpose::STANDARD.encode(format!("sinf-{index}")),
+            })
+            .collect()
+    }
+
+    fn write_zip(entries: Vec<(&str, Vec<u8>)>) -> Vec<u8> {
+        let mut out = Vec::new();
+        let cursor = Cursor::new(&mut out);
+        let mut zip = zip::ZipWriter::new(cursor);
+        let file_options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let dir_options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        for (path, content) in entries {
+            if path.ends_with('/') {
+                zip.add_directory(path, dir_options).unwrap();
+            } else {
+                zip.start_file(path, file_options).unwrap();
+                zip.write_all(&content).unwrap();
+            }
+        }
+        let _ = zip.finish().unwrap();
+        out
+    }
+
+    fn info_plist(executable: &str) -> Vec<u8> {
+        let mut dict = plist::Dictionary::new();
+        dict.insert(
+            "CFBundleExecutable".to_string(),
+            Value::String(executable.to_string()),
+        );
+        let value = Value::Dictionary(dict);
+        let mut out = Vec::new();
+        plist::to_writer_xml(&mut out, &value).unwrap();
+        out
+    }
+
+    #[test]
+    fn build_injection_plan_maps_replication_to_same_basename() {
+        let signatures = sample_signatures(2);
+        let manifest_targets = ManifestTargets {
+            sinf_paths: vec![
+                "SC_Info/Main.sinf".to_string(),
+                "PlugIns/Widget.appex/SC_Info/Widget.sinf".to_string(),
+            ],
+            sinf_replication_paths: vec!["Extensions/Copy/SC_Info/Widget.sinf".to_string()],
+        };
+
+        let plan = build_injection_plan(&signatures, &manifest_targets).unwrap();
+        assert_eq!(
+            plan.applied_paths,
+            vec![
+                "SC_Info/Main.sinf",
+                "PlugIns/Widget.appex/SC_Info/Widget.sinf",
+                "Extensions/Copy/SC_Info/Widget.sinf"
+            ]
+        );
+        assert_eq!(plan.replacements.len(), 3);
+        assert_eq!(plan.replacements[0].signature_index, 0);
+        assert_eq!(plan.replacements[1].signature_index, 1);
+        assert_eq!(plan.replacements[2].signature_index, 1);
+        assert!(plan.warning.is_none());
+    }
+
+    #[test]
+    fn build_injection_plan_rejects_unresolvable_replication_mapping() {
+        let signatures = sample_signatures(2);
+        let manifest_targets = ManifestTargets {
+            sinf_paths: vec![
+                "SC_Info/Main.sinf".to_string(),
+                "PlugIns/Widget.appex/SC_Info/Widget.sinf".to_string(),
+            ],
+            sinf_replication_paths: vec!["Extensions/Copy/SC_Info/Unknown.sinf".to_string()],
+        };
+
+        let plan = build_injection_plan(&signatures, &manifest_targets).unwrap();
+        assert!(plan.applied_paths.is_empty());
+        assert!(plan.replacements.is_empty());
+        assert!(plan
+            .warning
+            .unwrap_or_default()
+            .contains("找不到同 basename 的主 SinfPath"));
+    }
+
+    #[test]
+    fn append_signatures_falls_back_to_info_plist_when_manifest_missing() {
+        let archive = write_zip(vec![
+            ("Payload/Test.app/", Vec::new()),
+            ("Payload/Test.app/Info.plist", info_plist("TestExec")),
+        ]);
+
+        let mut client = SignatureClient {
+            archive,
+            filename: String::new(),
+            metadata: SignatureMetadata {
+                bundle_display_name: None,
+                bundle_short_version_string: None,
+                bundle_id: None,
+                artwork_url: None,
+                artist_name: None,
+                apple_id: None,
+                user_name: None,
+            },
+            signatures: vec![Sinf {
+                id: "0".to_string(),
+                sinf: base64::engine::general_purpose::STANDARD.encode(b"fallback-sinf"),
+            }],
+            email: "tester@example.com".to_string(),
+        };
+
+        let result = client.append_signatures().unwrap();
+        assert_eq!(result.applied_paths, vec!["SC_Info/TestExec.sinf"]);
+        assert!(result
+            .warning
+            .unwrap_or_default()
+            .contains("回退注入首个 sinf"));
+
+        let mut zip = ZipArchive::new(Cursor::new(client.archive)).unwrap();
+        let mut entry = zip
+            .by_name("Payload/Test.app/SC_Info/TestExec.sinf")
+            .unwrap();
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content).unwrap();
+        assert_eq!(content, b"fallback-sinf");
+    }
+
+    #[test]
+    fn append_signatures_injects_replication_with_matching_primary_signature() {
+        let mut manifest = plist::Dictionary::new();
+        manifest.insert(
+            "SinfPaths".to_string(),
+            Value::Array(vec![
+                Value::String("SC_Info/Main.sinf".to_string()),
+                Value::String("PlugIns/Widget.appex/SC_Info/Widget.sinf".to_string()),
+            ]),
+        );
+        manifest.insert(
+            "SinfReplicationPaths".to_string(),
+            Value::Array(vec![Value::String(
+                "Extensions/Copy/SC_Info/Widget.sinf".to_string(),
+            )]),
+        );
+        let mut manifest_bytes = Vec::new();
+        plist::to_writer_xml(&mut manifest_bytes, &Value::Dictionary(manifest)).unwrap();
+
+        let archive = write_zip(vec![
+            ("Payload/Test.app/", Vec::new()),
+            ("Payload/Test.app/Info.plist", info_plist("Main")),
+            ("Payload/Test.app/SC_Info/Manifest.plist", manifest_bytes),
+        ]);
+
+        let signatures = vec![
+            Sinf {
+                id: "0".to_string(),
+                sinf: base64::engine::general_purpose::STANDARD.encode(b"main-sinf"),
+            },
+            Sinf {
+                id: "1".to_string(),
+                sinf: base64::engine::general_purpose::STANDARD.encode(b"widget-sinf"),
+            },
+        ];
+
+        let mut client = SignatureClient {
+            archive,
+            filename: format!(
+                "/tmp/signature-test-{}.ipa",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ),
+            metadata: SignatureMetadata {
+                bundle_display_name: None,
+                bundle_short_version_string: None,
+                bundle_id: None,
+                artwork_url: None,
+                artist_name: None,
+                apple_id: None,
+                user_name: None,
+            },
+            signatures,
+            email: "tester@example.com".to_string(),
+        };
+
+        let result = client.append_signatures().unwrap();
+        assert!(result.warning.is_none());
+
+        let mut zip = ZipArchive::new(Cursor::new(client.archive)).unwrap();
+
+        let mut main_bytes = Vec::new();
+        zip.by_name("Payload/Test.app/SC_Info/Main.sinf")
+            .unwrap()
+            .read_to_end(&mut main_bytes)
+            .unwrap();
+
+        let mut widget_bytes = Vec::new();
+        zip.by_name("Payload/Test.app/PlugIns/Widget.appex/SC_Info/Widget.sinf")
+            .unwrap()
+            .read_to_end(&mut widget_bytes)
+            .unwrap();
+
+        let mut replication_bytes = Vec::new();
+        zip.by_name("Payload/Test.app/Extensions/Copy/SC_Info/Widget.sinf")
+            .unwrap()
+            .read_to_end(&mut replication_bytes)
+            .unwrap();
+
+        assert_eq!(main_bytes, b"main-sinf");
+        assert_eq!(widget_bytes, b"widget-sinf");
+        assert_eq!(replication_bytes, b"widget-sinf");
+    }
 }
