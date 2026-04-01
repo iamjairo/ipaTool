@@ -3491,68 +3491,98 @@ async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> im
         sync_download_records_from_filesystem(&db, &data.downloads_dir);
     }
 
-    match data.db.lock().unwrap().get_all_download_records() {
-        Ok(records) => {
-            let db = data.db.lock().unwrap();
-            let items = records
-                .into_iter()
-                .map(|record| {
-                    let inspection = inspection_for_record(&record);
-                    let file_exists = record
-                        .file_path
-                        .as_ref()
-                        .map(PathBuf::from)
-                        .map(|path| path.exists())
-                        .unwrap_or(false);
-                    // backfill only if DB was empty and we got a fresh inspect
-                    if inspection.is_some() && record.inspection_json.is_none() {
-                        sync_record_delivery(&db, &record, inspection.as_ref(), file_exists);
-                    }
-                    let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
-                    let record_id = record.id;
-                    let download_url = record_id.map(|id| build_record_download_url(&req, id));
-                    let install_url = if decision.ota_installable {
-                        record_id.and_then(|id| build_record_install_url(&req, &record, id))
-                    } else {
-                        None
-                    };
-
-                    DownloadRecordView {
-                        id: record.id,
-                        job_id: record.job_id,
-                        app_name: record.app_name,
-                        app_id: record.app_id,
-                        bundle_id: record.bundle_id,
-                        version: record.version,
-                        account_email: record.account_email,
-                        account_region: record.account_region,
-                        download_date: record.download_date,
-                        status: record.status,
-                        file_size: record.file_size,
-                        file_path: record.file_path,
-                        download_url,
-                        install_url,
-                        artwork_url: record.artwork_url,
-                        artist_name: record.artist_name,
-                        progress: record.progress,
-                        error: record.error,
-                        package_kind: decision.package_kind,
-                        ota_installable: decision.ota_installable,
-                        install_method: decision.install_method,
-                        created_at: record.created_at,
-                        file_exists,
-                        inspection,
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            HttpResponse::Ok().json(ApiResponse::success(items))
+    let records = {
+        let db = data.db.lock().unwrap();
+        match db.get_all_download_records() {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[records] failed to get records: {}", e);
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("获取下载记录失败".to_string()));
+            }
         }
-        Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "获取下载记录失败: {}",
-            e
-        ))),
+    };
+
+    // Backfill inspection for records that lack it (outside db lock to avoid deadlock)
+    let backfill: Vec<(i64, String)> = records
+        .iter()
+        .filter(|r| {
+            r.inspection_json.is_none()
+                && r.file_path
+                    .as_ref()
+                    .map(|p| PathBuf::from(p).exists())
+                    .unwrap_or(false)
+        })
+        .filter_map(|r| {
+            let path = PathBuf::from(r.file_path.as_ref()?);
+            let inspection = inspect_existing_ipa(&path)?;
+            let json = serde_json::to_string(&inspection).ok()?;
+            Some((r.id?, json))
+        })
+        .collect();
+
+    if !backfill.is_empty() {
+        let db = data.db.lock().unwrap();
+        for (record_id, json) in backfill {
+            let _ = db.update_download_record_delivery(
+                record_id,
+                None,
+                None,
+                None,
+                Some(json.as_str()),
+            );
+        }
     }
+
+    let items = records
+        .into_iter()
+        .map(|record| {
+            let inspection = inspection_for_record(&record);
+            let file_exists = record
+                .file_path
+                .as_ref()
+                .map(PathBuf::from)
+                .map(|path| path.exists())
+                .unwrap_or(false);
+            let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
+            let record_id = record.id;
+            let download_url = record_id.map(|id| build_record_download_url(&req, id));
+            let install_url = if decision.ota_installable {
+                record_id.and_then(|id| build_record_install_url(&req, &record, id))
+            } else {
+                None
+            };
+
+            DownloadRecordView {
+                id: record.id,
+                job_id: record.job_id,
+                app_name: record.app_name,
+                app_id: record.app_id,
+                bundle_id: record.bundle_id,
+                version: record.version,
+                account_email: record.account_email,
+                account_region: record.account_region,
+                download_date: record.download_date,
+                status: record.status,
+                file_size: record.file_size,
+                file_path: record.file_path,
+                download_url,
+                install_url,
+                artwork_url: record.artwork_url,
+                artist_name: record.artist_name,
+                progress: record.progress,
+                error: record.error,
+                package_kind: decision.package_kind,
+                ota_installable: decision.ota_installable,
+                install_method: decision.install_method,
+                created_at: record.created_at,
+                file_exists,
+                inspection,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    HttpResponse::Ok().json(ApiResponse::success(items))
 }
 
 async fn download_record_file(
