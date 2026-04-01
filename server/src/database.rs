@@ -315,6 +315,20 @@ impl Database {
             );
         }
 
+        // 账号唯一性：按 email 收口，只保留最新一条，避免 token 变了后产生重复账号。
+        let _ = conn.execute(
+            "DELETE FROM accounts
+             WHERE id NOT IN (
+               SELECT MAX(id) FROM accounts WHERE email IS NOT NULL AND email != '' GROUP BY email
+             )
+             AND email IS NOT NULL AND email != ''",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_email_unique ON accounts(email)",
+            [],
+        );
+
         let table_info: Vec<(i32, String, String, bool, i32, bool)> = conn
             .prepare("PRAGMA table_info(download_records)")?
             .query_map([], |row| {
@@ -647,11 +661,37 @@ impl Database {
         Ok(account)
     }
 
+    pub fn get_latest_account_region_by_email(&self, email: &str) -> Result<Option<String>> {
+        let conn = self.connection.lock().unwrap();
+        conn.query_row(
+            "SELECT region FROM accounts WHERE email = ? ORDER BY id DESC LIMIT 1",
+            params![email],
+            |row| row.get(0),
+        )
+        .optional()
+    }
+
+    pub fn update_account_region(&self, token: &str, region: &str) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute(
+            "UPDATE accounts SET region = ?, updated_at = CURRENT_TIMESTAMP WHERE token = ?",
+            params![region, token],
+        )?;
+        Ok(())
+    }
+
     pub fn save_account(&self, account: &Account) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         conn.execute(
-            "INSERT OR REPLACE INTO accounts (token, email, region, guid, cookie_user, cookies) 
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO accounts (token, email, region, guid, cookie_user, cookies)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(email) DO UPDATE SET
+                 token = excluded.token,
+                 region = excluded.region,
+                 guid = excluded.guid,
+                 cookie_user = excluded.cookie_user,
+                 cookies = excluded.cookies,
+                 updated_at = CURRENT_TIMESTAMP",
             params![
                 account.token,
                 account.email,
@@ -937,6 +977,43 @@ impl Database {
              FROM download_records
              WHERE id = ? LIMIT 1",
             params![id],
+            |row| {
+                Ok(DownloadRecord {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    app_name: row.get(2)?,
+                    app_id: row.get(3)?,
+                    bundle_id: row.get(4)?,
+                    version: row.get(5)?,
+                    account_email: row.get(6)?,
+                    account_region: row.get(7)?,
+                    download_date: row.get(8)?,
+                    status: row.get(9)?,
+                    file_size: row.get(10)?,
+                    file_path: row.get(11)?,
+                    install_url: row.get(12)?,
+                    artwork_url: row.get(13)?,
+                    artist_name: row.get(14)?,
+                    progress: row.get(15)?,
+                    error: row.get(16)?,
+                    created_at: row.get(17)?,
+                })
+            },
+        )
+        .optional()
+    }
+
+    pub fn get_download_record_by_job_id(&self, job_id: &str) -> Result<Option<DownloadRecord>> {
+        let conn = self.connection.lock().unwrap();
+        conn.query_row(
+            "SELECT id, job_id, app_name, app_id, bundle_id, version, account_email, account_region,
+                    download_date, status, file_size, file_path, install_url, artwork_url,
+                    artist_name, progress, error, created_at
+             FROM download_records
+             WHERE job_id = ?
+             ORDER BY id DESC
+             LIMIT 1",
+            params![job_id],
             |row| {
                 Ok(DownloadRecord {
                     id: row.get(0)?,

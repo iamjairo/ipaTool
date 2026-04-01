@@ -327,10 +327,18 @@ impl DownloadManager {
 
         let response1 = self.client.get(&url1).send().await;
         let versions = if let Ok(resp) = response1 {
-            resp.json::<Value>()
-                .await
-                .ok()
-                .and_then(|json| json.get("data").and_then(|d| d.as_array()).cloned())
+            if let Ok(json) = resp.json::<Value>().await {
+                // Handle both {data: [...]} and direct [...] formats
+                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                    Some(data.clone())
+                } else if json.is_array() {
+                    Some(json.as_array().cloned().unwrap_or_default())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         } else {
             None
         };

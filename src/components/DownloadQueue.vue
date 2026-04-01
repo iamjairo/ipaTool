@@ -14,7 +14,7 @@
         </div>
         <div>
           <h2 class="text-xl font-bold text-gray-900 dark:text-white">下载队列</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">{{ queue.length }} 个任务 · {{ records.length }} 条记录</p>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ currentTasks.length }} 个当前任务 · {{ records.length }} 条记录 · 已占用 {{ formatStorageM(totalStorageBytes) }}</p>
         </div>
       </div>
       <div class="flex gap-2">
@@ -23,9 +23,9 @@
       </div>
     </div>
 
-    <section v-if="queue.length > 0" class="space-y-3">
+    <section v-if="currentTasks.length > 0" class="space-y-3">
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">当前任务</h3>
-      <div v-for="task in queue" :key="task.id" class="queue-row">
+      <div v-for="task in currentTasks" :key="task.id" class="queue-row">
         <AppArtwork :src="task.artworkUrl" :alt="task.appName" :label="task.appName" />
         <div class="row-main">
           <div class="row-top">
@@ -48,7 +48,9 @@
           <div v-if="task.error" class="row-error">{{ task.error }}</div>
           <div class="row-actions">
             <el-button v-if="task.status === 'completed' && task.downloadUrl" type="primary" size="small" @click="download(task.downloadUrl)">下载</el-button>
-            <el-button v-if="task.status === 'completed' && task.installUrl" type="success" size="small" @click="install(task.installUrl)">安装</el-button>
+            <a v-if="task.status === 'completed' && task.installUrl" :href="buildInstallUrl(task.installUrl)" class="inline-block">
+              <el-button type="success" size="small">安装</el-button>
+            </a>
             <el-button size="small" type="danger" plain @click="removeTask(task.id)">{{ task.status === 'completed' || task.status === 'failed' ? '移除' : '取消' }}</el-button>
           </div>
         </div>
@@ -82,14 +84,17 @@
           <div v-if="record.error" class="row-error">{{ record.error }}</div>
           <div class="row-actions">
             <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">下载</el-button>
-            <el-button v-if="record.installUrl && record.fileExists" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
+            <a v-if="record.installUrl && record.fileExists" :href="buildInstallUrl(record.installUrl)" class="inline-block">
+              <el-button type="success" size="small">安装</el-button>
+            </a>
+            <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">清理安装包</el-button>
             <el-button size="small" type="danger" plain @click="removeRecord(record.id)">删除记录</el-button>
           </div>
         </div>
       </div>
     </section>
 
-    <div v-if="queue.length === 0 && records.length === 0" class="text-center py-12 text-gray-500 dark:text-gray-400">
+    <div v-if="currentTasks.length === 0 && records.length === 0" class="text-center py-12 text-gray-500 dark:text-gray-400">
       <svg class="mx-auto h-16 w-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
       </svg>
@@ -100,13 +105,13 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import AppArtwork from './AppArtwork.vue'
+import { useAppStore } from '../stores/app'
 
 const API_BASE = '/api'
-
-defineProps({
+const props = defineProps({
   queue: {
     type: Array,
     default: () => []
@@ -114,7 +119,14 @@ defineProps({
 })
 
 const emit = defineEmits(['remove-item'])
+const appStore = useAppStore()
 const records = ref([])
+const pollTimers = new Map()
+const currentTasks = computed(() => props.queue.filter(task => !['completed', 'ready'].includes(task?.status)))
+const totalStorageBytes = computed(() => records.value.reduce((sum, item) => {
+  if (!item?.fileExists) return sum
+  return sum + Number(item.fileSize || 0)
+}, 0))
 
 const loadRecords = async () => {
   try {
@@ -171,6 +183,28 @@ const clearAllRecords = async () => {
   }
 }
 
+const cleanupRecordFile = async (record) => {
+  try {
+    await ElMessageBox.confirm(`确定清理 ${record.appName || record.filePath || '该安装包'} 吗？`, '确认清理', {
+      type: 'warning',
+      confirmButtonText: '清理安装包',
+      cancelButtonText: '取消'
+    })
+    const response = await fetch(`${API_BASE}/download-records/${record.id}/file`, {
+      method: 'DELETE',
+      credentials: 'include'
+    })
+    const data = await response.json()
+    if (!data.ok) throw new Error(data.error || '清理失败')
+    ElMessage.success(`已清理 ${formatStorageM(data.data?.freed_bytes || 0)}`)
+    await loadRecords()
+  } catch (error) {
+    if (error !== 'cancel') {
+      ElMessage.error(error.message || '清理失败')
+    }
+  }
+}
+
 const cleanupServerFiles = async () => {
   try {
     await ElMessageBox.confirm('确定清理服务器上的下载目录吗？', '确认清理', {
@@ -193,9 +227,129 @@ const cleanupServerFiles = async () => {
   }
 }
 
-const removeTask = (id) => emit('remove-item', id)
+const isFinalStatus = (status) => ['completed', 'ready', 'failed', 'error'].includes(status)
+
+const stopTaskPolling = (taskId) => {
+  const timer = pollTimers.get(taskId)
+  if (timer) {
+    clearInterval(timer)
+    pollTimers.delete(taskId)
+  }
+}
+
+const markTaskInterrupted = (taskId, message = '任务已失效，可能是服务重启或页面切换后丢失，请重新发起下载') => {
+  stopTaskPolling(taskId)
+  appStore.updateQueueItem(taskId, {
+    status: 'failed',
+    stage: 'interrupted',
+    error: message
+  })
+}
+
+const syncTaskSnapshot = async (taskId, snapshot) => {
+  const updates = {
+    stage: snapshot.stage || '',
+    progress: snapshot.progress ?? 0,
+    error: snapshot.error || '',
+    status: snapshot.status === 'ready' ? 'completed' : snapshot.status
+  }
+
+  if (snapshot.status === 'ready') {
+    updates.progress = 100
+    updates.downloadUrl = snapshot.downloadUrl
+    updates.installUrl = snapshot.installUrl
+    updates.fileSize = snapshot.fileSize || 0
+    stopTaskPolling(taskId)
+    await loadRecords()
+  } else if (snapshot.status === 'failed') {
+    stopTaskPolling(taskId)
+  }
+
+  appStore.updateQueueItem(taskId, updates)
+}
+
+const pollTaskStatus = async (taskId) => {
+  try {
+    const response = await fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(taskId)}`, {
+      credentials: 'include'
+    })
+
+    if (response.status === 404) {
+      markTaskInterrupted(taskId)
+      return
+    }
+
+    const data = await response.json()
+    if (!response.ok || !data.ok || !data.data) {
+      if (response.status >= 400) {
+        markTaskInterrupted(taskId, data?.error || '任务状态获取失败，请重新发起下载')
+      }
+      return
+    }
+
+    await syncTaskSnapshot(taskId, data.data)
+  } catch (error) {
+    console.error('Failed to poll task status:', error)
+  }
+}
+
+const ensureTaskPolling = (task) => {
+  if (!task?.id || isFinalStatus(task.status) || pollTimers.has(task.id)) return
+
+  pollTaskStatus(task.id)
+  const timer = setInterval(() => pollTaskStatus(task.id), 1500)
+  pollTimers.set(task.id, timer)
+}
+
+const syncActiveTaskPolling = () => {
+  const activeIds = new Set()
+
+  for (const task of props.queue) {
+    if (task?.id && !isFinalStatus(task.status)) {
+      activeIds.add(task.id)
+      ensureTaskPolling(task)
+    }
+  }
+
+  for (const taskId of pollTimers.keys()) {
+    if (!activeIds.has(taskId)) {
+      stopTaskPolling(taskId)
+    }
+  }
+}
+
+const removeTask = (id) => {
+  stopTaskPolling(id)
+  emit('remove-item', id)
+}
 const download = (url) => window.open(url, '_blank', 'noopener')
-const install = (url) => { window.location.href = url }
+
+const buildInstallUrl = (installUrl) => {
+  if (!installUrl) return null
+
+  // 解析 installUrl，提取 manifest URL
+  const itmsMatch = installUrl.match(/itms-services:\/\/\?action=download-manifest&url=(.+)/)
+  if (!itmsMatch) return installUrl
+
+  const encodedManifest = itmsMatch[1]
+  let manifestUrl
+
+  try {
+    manifestUrl = decodeURIComponent(encodedManifest)
+  } catch {
+    return installUrl
+  }
+
+  // 替换 manifest URL 中的 base_url 为前端当前域名
+  const origin = window.location.origin
+  const url = new URL(manifestUrl)
+  url.origin = origin
+
+  const newManifestUrl = url.toString()
+
+  // 重新编码并组装 installUrl
+  return `itms-services://?action=download-manifest&url=${encodeURIComponent(newManifestUrl)}`
+}
 
 const statusTagType = (status) => {
   if (status === 'completed' || status === 'ready') return 'success'
@@ -221,6 +375,8 @@ const formatFileSize = (bytes) => {
   return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`
 }
 
+const formatStorageM = (bytes) => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} M`
+
 const formatDate = (value) => {
   if (!value) return '未知时间'
   const date = new Date(value)
@@ -234,7 +390,24 @@ const formatDate = (value) => {
   })
 }
 
-onMounted(loadRecords)
+watch(
+  () => props.queue.map(task => `${task?.id}:${task?.status}:${task?.progress}:${task?.stage}`),
+  () => {
+    syncActiveTaskPolling()
+  },
+  { immediate: true }
+)
+
+onMounted(() => {
+  loadRecords()
+  syncActiveTaskPolling()
+})
+
+onBeforeUnmount(() => {
+  for (const taskId of [...pollTimers.keys()]) {
+    stopTaskPolling(taskId)
+  }
+})
 </script>
 
 <style scoped>
@@ -299,6 +472,11 @@ onMounted(loadRecords)
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+.row-actions :deep(.el-button) {
+  margin: 0;
 }
 
 .row-error {

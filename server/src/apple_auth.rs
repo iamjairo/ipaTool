@@ -4,7 +4,77 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::Duration;
 
-fn extract_account_metadata(result: &HashMap<String, Value>) -> (Option<String>, Option<String>) {
+fn storefront_region(code: &str) -> Option<&'static str> {
+    match code {
+        "143441" => Some("US"),
+        "143465" => Some("CN"),
+        "143462" => Some("JP"),
+        "143444" => Some("GB"),
+        "143443" => Some("DE"),
+        "143442" => Some("FR"),
+        "143455" => Some("CA"),
+        "143460" => Some("AU"),
+        _ => None,
+    }
+}
+
+fn normalize_region_candidate(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let alpha: String = trimmed
+        .chars()
+        .filter(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_uppercase();
+    if (2..=3).contains(&alpha.len()) {
+        return Some(alpha);
+    }
+
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if let Some(region) = storefront_region(&digits) {
+        return Some(region.to_string());
+    }
+
+    None
+}
+
+fn first_region_from_object(object: &serde_json::Map<String, Value>) -> Option<String> {
+    [
+        "countryCode",
+        "countryISOCode",
+        "country",
+        "storefront",
+        "storeFront",
+        "storefrontId",
+        "storeFrontId",
+    ]
+    .into_iter()
+    .find_map(|key| object.get(key))
+    .and_then(|value| match value {
+        Value::String(s) => normalize_region_candidate(s),
+        Value::Number(n) => normalize_region_candidate(&n.to_string()),
+        _ => None,
+    })
+}
+
+fn extract_region_from_headers(headers: &header::HeaderMap) -> Option<String> {
+    [
+        "x-set-apple-store-front",
+        "x-apple-store-front",
+        "x-apple-storefront",
+    ]
+    .into_iter()
+    .find_map(|name| headers.get(name))
+    .and_then(|value| value.to_str().ok())
+    .and_then(normalize_region_candidate)
+}
+
+fn extract_account_metadata(
+    result: &HashMap<String, Value>,
+) -> (Option<String>, Option<String>, Option<String>) {
     let account_info = result
         .get("accountInfo")
         .and_then(|value| value.as_object());
@@ -14,9 +84,11 @@ fn extract_account_metadata(result: &HashMap<String, Value>) -> (Option<String>,
         .and_then(|value| value.as_str())
         .map(str::to_string);
 
-    let display_name = account_info
+    let address = account_info
         .and_then(|account| account.get("address"))
-        .and_then(|value| value.as_object())
+        .and_then(|value| value.as_object());
+
+    let display_name = address
         .map(|address| {
             [
                 address.get("firstName").and_then(|value| value.as_str()),
@@ -30,7 +102,11 @@ fn extract_account_metadata(result: &HashMap<String, Value>) -> (Option<String>,
         })
         .filter(|name| !name.is_empty());
 
-    (display_name, email)
+    let region = address
+        .and_then(first_region_from_object)
+        .or_else(|| account_info.and_then(first_region_from_object));
+
+    (display_name, email, region)
 }
 
 /// Best-effort normalize Apple's XML-ish plist responses.
@@ -141,6 +217,7 @@ pub struct AuthInfo {
     pub password_token: Option<String>,
     pub display_name: Option<String>,
     pub email: Option<String>,
+    pub region: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -349,6 +426,7 @@ impl Store {
                 .await?;
 
             let status = response.status();
+            let response_region = extract_region_from_headers(response.headers());
 
             // Handle 302 redirect — follow to new URL and retry
             if status == StatusCode::FOUND || status == StatusCode::MOVED_PERMANENTLY {
@@ -386,7 +464,7 @@ impl Store {
             );
 
             // Parse plist response
-            let result = match parse_apple_plist_response(&body_text) {
+            let mut result = match parse_apple_plist_response(&body_text) {
                 Ok(m) => m,
                 Err(e) => {
                     log::error!(
@@ -408,6 +486,11 @@ impl Store {
                     return Ok(m);
                 }
             };
+
+            if let Some(region) = response_region {
+                log::info!("Apple auth inferred region from headers: {}", region);
+                result.insert("region".to_string(), Value::String(region));
+            }
 
             let failure_type = result
                 .get("failureType")
@@ -434,13 +517,16 @@ impl Store {
         let has_success = result.contains_key("dsPersonId") || result.contains_key("passwordToken");
 
         if has_success {
-            let (display_name, account_email) = extract_account_metadata(&result);
+            let (display_name, account_email, region) = extract_account_metadata(&result);
             final_result.insert("_state".to_string(), Value::String("success".to_string()));
             if let Some(display_name) = display_name {
                 final_result.insert("displayName".to_string(), Value::String(display_name));
             }
             if let Some(account_email) = account_email {
                 final_result.insert("email".to_string(), Value::String(account_email));
+            }
+            if let Some(region) = region {
+                final_result.insert("region".to_string(), Value::String(region));
             }
             log::info!("Apple auth SUCCESS for {}", email);
         } else {
@@ -644,6 +730,7 @@ impl AccountStore {
                     .and_then(|v| v.as_str())
                     .map(String::from),
                 email: Some(self.account_email.clone()),
+                region: result.get("region").and_then(|v| v.as_str()).map(String::from),
             };
             self.auth_info = Some(auth_info);
         }

@@ -13,6 +13,7 @@ pub use database::{
     Account, AdminUser, BatchDownloadItem, BatchDownloadTask, Credentials, Database, DownloadRecord,
     EncryptionKey, NewSubscription, SessionRecord, Subscription,
 };
+
 pub use download_manager::{AppUpdate, BatchItem, DownloadManager};
 pub use ipa_handler::{
     download_ipa_with_account, get_license_error_message, DownloadMetadata, DownloadParams,

@@ -101,7 +101,7 @@
             v-else
             class="tab-svg"
             viewBox="0 0 24 24"
-              fill="none"
+            fill="none"
             stroke="currentColor"
             stroke-width="2"
             stroke-linecap="round"
@@ -109,6 +109,7 @@
             v-html="tab.svgPath"
           />
         </div>
+        <span class="mobile-tab-label">{{ tab.label }}</span>
       </button>
     </div>
   </div>
@@ -136,6 +137,8 @@ const handleAppSelected = (app) => emit('app-selected', app)
 const handleDownloadStarted = (task) => emit('download-started', task)
 
 // SVG paths for tab icons — semantic, clear, consistent
+const activeQueueCount = computed(() => appStore.taskQueue.filter(task => !['completed', 'ready'].includes(task?.status)).length)
+
 const tabs = computed(() => [
   {
     id: 'download',
@@ -147,7 +150,7 @@ const tabs = computed(() => [
     id: 'queue',
     label: '队列',
     svgPath: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
-    badge: appStore.taskQueue.length > 0 ? String(appStore.taskQueue.length) : null
+    badge: activeQueueCount.value > 0 ? String(activeQueueCount.value) : null
   },
   {
     id: 'ipa',
@@ -326,19 +329,19 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-around;
   align-items: center;
-  height: 60px;
-  padding-bottom: env(safe-area-inset-bottom);
-  background: rgba(255,255,255,0.97);
+  height: 68px;
+  padding: 6px 8px calc(env(safe-area-inset-bottom) + 6px);
+  background: rgba(255,255,255,0.98);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-top: 1px solid rgba(0,0,0,0.08);
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.04);
+  box-shadow: 0 -6px 18px rgba(15,23,42,0.08);
 }
 
 .dark .mobile-tab-bar {
-  background: rgba(31,41,55,0.97);
-  border-top-color: rgba(55,65,81,0.5);
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+  background: rgba(17,24,39,0.98);
+  border-top-color: rgba(55,65,81,0.6);
+  box-shadow: 0 -6px 18px rgba(0,0,0,0.32);
 }
 
 .mobile-tab-btn {
@@ -347,25 +350,29 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   height: 100%;
   border: none;
+  border-radius: 14px;
   background: transparent;
-  color: #6b7280;
+  color: #475569;
   cursor: pointer;
   transition: all 0.2s ease;
   -webkit-tap-highlight-color: transparent;
 }
 
 .dark .mobile-tab-btn {
-  color: #9ca3af;
+  color: #cbd5e1;
 }
 
 .mobile-tab-btn-active {
-  color: #3b82f6 !important;
+  color: #2563eb !important;
+  background: rgba(37, 99, 235, 0.10);
 }
 
 .dark .mobile-tab-btn-active {
-  color: #60a5fa !important;
+  color: #93c5fd !important;
+  background: rgba(59, 130, 246, 0.18);
 }
 
 .mobile-tab-icon {
@@ -373,8 +380,15 @@ onUnmounted(() => {
 }
 
 .mobile-tab-icon .tab-svg {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
+}
+
+.mobile-tab-label {
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .mobile-tab-btn .tab-badge :deep(.el-badge__content) {
@@ -391,7 +405,7 @@ onUnmounted(() => {
 
 @media (max-width: 767px) {
   .tab-content.with-mobile-tabs {
-    padding-bottom: 80px;
+    padding-bottom: 92px;
   }
 }
 </style>

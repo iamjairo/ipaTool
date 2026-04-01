@@ -158,11 +158,38 @@ impl SignatureClient {
             .map_err(|e| format!("Invalid UTF-8: {}", e))
             .unwrap();
 
-        let mut archive = zip::ZipWriter::new(std::io::Cursor::new(&mut self.archive));
+        let reader = std::io::Cursor::new(self.archive.clone());
+        let mut zip = match ZipArchive::new(reader) {
+            Ok(z) => z,
+            Err(_) => {
+                let mut archive = zip::ZipWriter::new(std::io::Cursor::new(&mut self.archive));
+                let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+                archive.start_file("iTunesMetadata.plist", options).unwrap();
+                archive.write_all(metadata_content.as_bytes()).unwrap();
+                let _ = archive.finish();
+                self.archive.flush().unwrap();
+                return self;
+            }
+        };
+
+        let mut new_archive = zip::ZipWriter::new(std::io::Cursor::new(&mut self.archive));
         let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
-        archive.start_file("iTunesMetadata.plist", options).unwrap();
-        archive.write_all(metadata_content.as_bytes()).unwrap();
-        let _ = archive.finish();
+
+        for i in 0..zip.len() {
+            let mut file = zip.by_index(i).unwrap();
+            let name = file.name().to_string();
+            if name == "iTunesMetadata.plist" {
+                continue;
+            }
+            new_archive.start_file(&name, options).unwrap();
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer).unwrap();
+            new_archive.write_all(&buffer).unwrap();
+        }
+
+        new_archive.start_file("iTunesMetadata.plist", options).unwrap();
+        new_archive.write_all(metadata_content.as_bytes()).unwrap();
+        let _ = new_archive.finish();
 
         self.archive.flush().unwrap();
         self

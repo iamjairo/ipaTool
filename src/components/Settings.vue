@@ -218,10 +218,37 @@
         </div>
       </div>
     </div>
+    <div class="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-sm border border-gray-200 dark:border-gray-700">
+      <div class="flex items-center space-x-3 mb-4">
+        <div class="w-10 h-10 bg-gradient-to-br from-slate-500 to-gray-700 rounded-lg flex items-center justify-center shadow">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </div>
+        <div>
+          <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
+            版本信息
+          </h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            当前前端构建版本
+          </p>
+        </div>
+      </div>
+
+      <div class="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          版本号
+        </p>
+        <p class="mt-1 font-mono text-base text-gray-900 dark:text-white">
+          v{{ appVersion }} · build {{ buildId }}
+        </p>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
+/* global __APP_VERSION__, __APP_BUILD_ID__ */
 import { reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useAppStore } from '../stores/app'
@@ -231,6 +258,8 @@ import AccountManager from './AccountManager.vue'
 const emit = defineEmits(['accounts-updated', 'logout'])
 const appStore = useAppStore()
 const notifications = useNotifications()
+const appVersion = __APP_VERSION__
+const buildId = __APP_BUILD_ID__
 
 // ---- Notification helpers ----
 async function handleRequestPermission() {
