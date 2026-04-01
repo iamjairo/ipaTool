@@ -788,17 +788,43 @@ fn derive_delivery_decision(
         Some(inspection)
             if inspection.direct_install_ok && inspection.has_embedded_mobileprovision =>
         {
+            // Developer-signed / sideloaded IPA with provisioning profile
             DeliveryDecision {
                 package_kind: "ota_sideloadable".to_string(),
                 ota_installable: true,
                 install_method: "ota".to_string(),
             }
         }
-        Some(inspection)
-            if inspection.has_sc_info_manifest || !inspection.encrypted_binaries.is_empty() =>
-        {
+        Some(inspection) if inspection.direct_install_ok && inspection.has_sc_info_manifest => {
+            // App Store IPA with all declared sinfs properly injected.
+            // FairPlay encrypted binaries are expected and handled by iOS at runtime.
+            // This matches ipatool.js and ApplePackage (Asspp) behavior.
             DeliveryDecision {
-                package_kind: "fairplay_appstore_package".to_string(),
+                package_kind: "appstore_sinf_package".to_string(),
+                ota_installable: true,
+                install_method: "ota".to_string(),
+            }
+        }
+        Some(inspection)
+            if inspection.has_sc_info_manifest
+                && !inspection.missing_sinf_paths.is_empty() =>
+        {
+            // App Store IPA but sinf injection incomplete — cannot install
+            DeliveryDecision {
+                package_kind: "appstore_incomplete_sinf".to_string(),
+                ota_installable: false,
+                install_method: if file_exists {
+                    "download_only"
+                } else {
+                    "manual_review"
+                }
+                .to_string(),
+            }
+        }
+        Some(inspection) if !inspection.encrypted_binaries.is_empty() => {
+            // Encrypted binaries with no sinfs and no provisioning profile
+            DeliveryDecision {
+                package_kind: "fairplay_encrypted".to_string(),
                 ota_installable: false,
                 install_method: if file_exists {
                     "download_only"

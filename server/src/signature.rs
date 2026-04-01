@@ -589,6 +589,7 @@ pub fn inspect_ipa_path(
     }
 
     let has_sc_info_manifest = !declared_sinf_paths.is_empty();
+    let sinf_fully_injected = has_sc_info_manifest && missing_sinf_paths.is_empty();
     let has_embedded_mobileprovision = zip
         .by_name(&format!(
             "Payload/{}/embedded.mobileprovision",
@@ -597,6 +598,8 @@ pub fn inspect_ipa_path(
         .is_ok();
 
     let mut blockers = Vec::new();
+
+    // Missing sinf files that the manifest declares → always a blocker.
     if !missing_sinf_paths.is_empty() {
         blockers.push(format!(
             "包内声明了 {} 个 .sinf 目标，但缺少 {} 个：{}",
@@ -605,19 +608,35 @@ pub fn inspect_ipa_path(
             missing_sinf_paths.join(", ")
         ));
     }
-    if !encrypted_binaries.is_empty() {
-        blockers.push(if has_embedded_mobileprovision {
-            format!(
+
+    if sinf_fully_injected {
+        // App Store IPA with all declared sinfs properly injected.
+        // FairPlay encrypted binaries are expected and will be handled by iOS
+        // at runtime using the sinf data — this is how ipatool.js and
+        // ApplePackage (Asspp) work. Do NOT block OTA install.
+        if !encrypted_binaries.is_empty() {
+            log::info!(
+                "[inspect] {} encrypted binaries present but all {} sinfs injected — OTA installable (App Store package)",
+                encrypted_binaries.len(),
+                present_sinf_paths.len(),
+            );
+        }
+    } else if has_embedded_mobileprovision {
+        // Developer-signed / sideloaded IPA with provisioning profile.
+        if !encrypted_binaries.is_empty() {
+            blockers.push(format!(
                 "检测到 {} 个 FairPlay 加密二进制，这类包通常不是可直接侧载的成品 IPA",
                 encrypted_binaries.len()
-            )
-        } else {
-            format!(
-                "检测到 {} 个 FairPlay 加密二进制，且未发现 embedded.mobileprovision，这类包不能直接侧载，继续安装大概率黑屏或闪退",
-                encrypted_binaries.len()
-            )
-        });
-    } else if !has_embedded_mobileprovision {
+            ));
+        }
+    } else if !encrypted_binaries.is_empty() {
+        // Encrypted binaries with no sinfs and no provisioning profile → unrunnable.
+        blockers.push(format!(
+            "检测到 {} 个 FairPlay 加密二进制，且未发现 embedded.mobileprovision，这类包不能直接侧载，继续安装大概率黑屏或闪退",
+            encrypted_binaries.len()
+        ));
+    } else {
+        // No encryption, no provisioning profile, no SC_Info → likely broken.
         blockers.push(
             "包内未发现 embedded.mobileprovision，当前看起来不像已正确重签的可侧载 IPA".to_string(),
         );
@@ -625,14 +644,26 @@ pub fn inspect_ipa_path(
 
     let direct_install_ok = blockers.is_empty();
     let blocked_reason = (!blockers.is_empty()).then(|| blockers.join("；"));
-    let recommended_action = blocked_reason
-        .as_ref()
-        .map(|_| "请先获取完整解密并正确重签（含全部 .appex）的 IPA，再重新上传或安装".to_string());
-    let summary = match (&blocked_reason, &recommended_action) {
-        (Some(reason), Some(action)) => format!("{}。{}。", reason, action),
-        (Some(reason), None) => reason.clone(),
-        _ if has_sc_info_manifest => "未检测到缺失的 .sinf 目标，可继续安装验证".to_string(),
-        _ => "未发现明显的 FairPlay / 签名阻塞，可继续安装验证".to_string(),
+    let recommended_action = blocked_reason.as_ref().map(|reason| {
+        if reason.contains("缺少") {
+            "请确认 Apple 下载响应是否返回了完整的 sinf 数据".to_string()
+        } else {
+            "请先获取完整解密并正确重签（含全部 .appex）的 IPA，再重新上传或安装".to_string()
+        }
+    });
+    let summary = if sinf_fully_injected && !encrypted_binaries.is_empty() {
+        format!(
+            "App Store 签名包：已注入 {} 个 .sinf（含 {} 个加密二进制），iOS 运行时负责 FairPlay 解密",
+            present_sinf_paths.len(),
+            encrypted_binaries.len()
+        )
+    } else {
+        match (&blocked_reason, &recommended_action) {
+            (Some(reason), Some(action)) => format!("{}。{}。", reason, action),
+            (Some(reason), None) => reason.clone(),
+            _ if has_sc_info_manifest => "未检测到缺失的 .sinf 目标，可继续安装验证".to_string(),
+            _ => "未发现明显的 FairPlay / 签名阻塞，可继续安装验证".to_string(),
+        }
     };
 
     Ok(IpaInspection {
