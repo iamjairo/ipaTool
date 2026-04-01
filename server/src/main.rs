@@ -3632,8 +3632,36 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
         }
     }
 
-    let db = data.db.lock().unwrap();
-    let items = scan_download_artifacts(&data.downloads_dir)
+    let artifacts = scan_download_artifacts(&data.downloads_dir);
+
+    let backfill: Vec<(i64, String)> = artifacts
+        .iter()
+        .filter_map(|artifact| {
+            let path_string = artifact.path.to_string_lossy().to_string();
+            let record = record_by_path.get(&path_string)?;
+            if record.inspection_json.is_some() {
+                return None;
+            }
+            let inspection = inspection_for_record(record)?;
+            let json = serde_json::to_string(&inspection).ok()?;
+            Some((record.id?, json))
+        })
+        .collect();
+
+    if !backfill.is_empty() {
+        let db = data.db.lock().unwrap();
+        for (record_id, json) in backfill {
+            let _ = db.update_download_record_delivery(
+                record_id,
+                None,
+                None,
+                None,
+                Some(json.as_str()),
+            );
+        }
+    }
+
+    let items = artifacts
         .into_iter()
         .map(|artifact| {
             let path_string = artifact.path.to_string_lossy().to_string();
@@ -3649,11 +3677,6 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
             } else {
                 inspect_existing_ipa(&artifact.path)
             };
-            if let Some(record) = record {
-                if inspection.is_some() && record.inspection_json.is_none() {
-                    sync_record_delivery(&db, record, inspection.as_ref(), true);
-                }
-            }
             let decision = derive_delivery_decision(inspection.as_ref(), true);
             let install_url = if decision.ota_installable {
                 record.and_then(|record| {
