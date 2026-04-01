@@ -48,7 +48,8 @@
           <div v-if="task.error" class="row-error">{{ task.error }}</div>
           <div class="row-actions">
             <el-button v-if="task.status === 'completed' && task.downloadUrl" type="primary" size="small" @click="download(task.downloadUrl)">下载</el-button>
-            <el-button v-if="task.status === 'completed' && task.installUrl" type="success" size="small" @click="install(task.installUrl)">安装</el-button>
+            <el-button v-if="task.status === 'completed' && task.otaInstallable && task.installUrl" type="success" size="small" @click="install(task.installUrl)">安装</el-button>
+            <el-tag v-else-if="task.status === 'completed' && task.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
             <el-button size="small" type="danger" plain @click="removeTask(task.id)">{{ task.status === 'completed' || task.status === 'failed' ? '移除' : '取消' }}</el-button>
           </div>
         </div>
@@ -82,12 +83,16 @@
           <div v-if="record.error" class="row-error">{{ record.error }}</div>
           <div class="row-actions">
             <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">下载</el-button>
-            <el-tooltip v-if="record.installUrl && record.fileExists && record.inspection && record.inspection.directInstallOk === false" :content="record.inspection.summary" placement="top">
+
+            <el-button v-if="record.fileExists && record.otaInstallable && record.installUrl" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
+
+            <el-tooltip v-else-if="record.fileExists && record.installMethod === 'download_only' && record.inspection" :content="record.inspection.summary" placement="top">
               <span>
-                <el-button type="success" size="small" disabled>安装</el-button>
+                <el-tag size="small" type="info">仅下载</el-tag>
               </span>
             </el-tooltip>
-            <el-button v-else-if="record.installUrl && record.fileExists" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
+            <el-tag v-else-if="record.fileExists && record.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
+
             <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">清理安装包</el-button>
             <el-button size="small" type="danger" plain @click="removeRecord(record.id)">删除记录</el-button>
           </div>
@@ -252,7 +257,11 @@ const syncTaskSnapshot = async (taskId, snapshot) => {
     stage: snapshot.stage || '',
     progress: snapshot.progress ?? 0,
     error: snapshot.error || '',
-    status: snapshot.status === 'ready' ? 'completed' : snapshot.status
+    status: snapshot.status === 'ready' ? 'completed' : snapshot.status,
+    packageKind: snapshot.packageKind,
+    otaInstallable: snapshot.otaInstallable,
+    installMethod: snapshot.installMethod,
+    inspection: snapshot.inspection
   }
 
   if (snapshot.status === 'ready') {

@@ -165,7 +165,7 @@ impl DownloadManager {
                 account_email,
                 resume_position,
             )
-                .await
+            .await
             {
                 Ok(result) => {
                     // 记录成功下载
@@ -206,6 +206,10 @@ impl DownloadManager {
                                 .filter(|value| !value.is_empty()),
                             progress: Some(100),
                             error: None,
+                            package_kind: None,
+                            ota_installable: None,
+                            install_method: None,
+                            inspection_json: None,
                             created_at: None,
                         };
                         let _ = db.lock().unwrap().add_download_record(&record);

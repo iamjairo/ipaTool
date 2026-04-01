@@ -62,13 +62,16 @@
           <div class="artifact-path">{{ item.filePath }}</div>
           <div class="artifact-actions">
             <el-button type="primary" size="small" @click="download(item.downloadUrl)">下载</el-button>
-            <el-tooltip v-if="item.installUrl && item.inspection && item.inspection.directInstallOk === false" :content="item.inspection.summary" placement="top">
+
+            <el-button v-if="item.otaInstallable && item.installUrl" type="success" size="small" @click="install(item.installUrl)">安装</el-button>
+            <el-tooltip v-else-if="item.installMethod === 'download_only' && item.inspection" :content="item.inspection.summary" placement="top">
               <span>
-                <el-button type="success" size="small" disabled>安装</el-button>
+                <el-tag size="small" type="info">仅下载</el-tag>
               </span>
             </el-tooltip>
-            <el-button v-else-if="item.installUrl" type="success" size="small" @click="install(item.installUrl)">安装</el-button>
+            <el-tag v-else-if="item.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
             <el-button v-else type="success" size="small" disabled>安装</el-button>
+
             <el-button type="danger" size="small" plain @click="removeArtifact(item)">删除</el-button>
           </div>
         </div>

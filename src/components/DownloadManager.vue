@@ -489,7 +489,7 @@
               下载 IPA{{ downloadReadyFileSize ? `（${formatFileSize(downloadReadyFileSize)}）` : '' }}
             </el-button>
             <a
-              v-if="downloadInstallUrl && isHttps"
+              v-if="downloadOtaInstallable && downloadInstallUrl && isHttps"
               :href="downloadInstallUrl"
               class="block w-full"
             >
@@ -505,7 +505,7 @@
               </el-button>
             </a>
             <el-button
-              v-else-if="downloadInstallUrl"
+              v-else-if="downloadOtaInstallable && downloadInstallUrl"
               type="success"
               size="large"
               class="w-full"
@@ -516,6 +516,12 @@
               </template>
               安装到设备
             </el-button>
+            <el-tooltip v-else-if="downloadInstallMethod === 'download_only' && downloadInspection && downloadInspection.summary" :content="downloadInspection.summary" placement="top">
+              <span class="block w-full">
+                <el-tag size="large" type="info" class="w-full text-center">仅下载</el-tag>
+              </span>
+            </el-tooltip>
+            <el-tag v-else-if="downloadInstallMethod === 'download_only'" size="large" type="info" class="w-full text-center">仅下载</el-tag>
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
             下载和安装已分离，请按需手动操作
@@ -669,6 +675,10 @@ const searching = ref(false)
 const downloadReadyUrl = ref('')
 const downloadReadyFileSize = ref(0)
 const downloadInstallUrl = ref('')
+const downloadPackageKind = ref('')
+const downloadOtaInstallable = ref(false)
+const downloadInstallMethod = ref('')
+const downloadInspection = ref(null)
 const showActionButtons = ref(false)
 
 const accountIdentityKey = (acc = {}) => String(acc.email || acc.dsid || acc.token || '').trim().toLowerCase()
@@ -1357,6 +1367,10 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     downloadReadyUrl.value = ''
     downloadReadyFileSize.value = 0
     downloadInstallUrl.value = ''
+    downloadPackageKind.value = ''
+    downloadOtaInstallable.value = false
+    downloadInstallMethod.value = ''
+    downloadInspection.value = null
     showActionButtons.value = false
     addLog('[进度] 创建下载任务…')
 
@@ -1468,7 +1482,11 @@ const pollJobStatus = (jobId, queueItem) => {
         clearInterval(timer)
         progressPercent.value = 100
         progressStage.value = '下载已完成'
-        addLog('[进度] 文件已保存到服务器，可手动下载或安装')
+        if (snapshot.installMethod === 'download_only') {
+          addLog('[进度] 文件已保存到服务器，仅支持下载导出')
+        } else {
+          addLog('[进度] 文件已保存到服务器，可手动下载或安装')
+        }
 
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, {
@@ -1476,12 +1494,20 @@ const pollJobStatus = (jobId, queueItem) => {
           progress: 100,
           downloadUrl: snapshot.downloadUrl,
           installUrl: snapshot.installUrl,
-          fileSize: snapshot.fileSize || 0
+          fileSize: snapshot.fileSize || 0,
+          packageKind: snapshot.packageKind,
+          otaInstallable: snapshot.otaInstallable,
+          installMethod: snapshot.installMethod,
+          inspection: snapshot.inspection
         })
 
         downloadReadyUrl.value = snapshot.downloadUrl || ''
         downloadReadyFileSize.value = snapshot.fileSize || 0
         downloadInstallUrl.value = snapshot.installUrl || ''
+        downloadPackageKind.value = snapshot.packageKind || ''
+        downloadOtaInstallable.value = !!snapshot.otaInstallable
+        downloadInstallMethod.value = snapshot.installMethod || ''
+        downloadInspection.value = snapshot.inspection || null
         showActionButtons.value = !!(snapshot.downloadUrl || snapshot.installUrl)
       } else if (snapshot.status === 'failed') {
         clearInterval(timer)
@@ -1564,7 +1590,7 @@ const connectToSSE = (jobId, queueItem) => {
       if (data.status === 'ready') {
         progressPercent.value = 100
         progressStage.value = '下载已完成'
-        addLog('[进度] 文件已保存到服务器，可手动下载或安装')
+        addLog('[进度] 文件已保存到服务器，可在任务完成后刷新获取交付信息')
 
         // 更新队列项状态
         const appStore = useAppStore()
@@ -1605,17 +1631,29 @@ const connectToSSE = (jobId, queueItem) => {
               downloadReadyUrl.value = jobData.data.downloadUrl || ''
               downloadReadyFileSize.value = jobData.data.fileSize || 0
               downloadInstallUrl.value = jobData.data.installUrl || ''
+              downloadPackageKind.value = jobData.data.packageKind || ''
+              downloadOtaInstallable.value = !!jobData.data.otaInstallable
+              downloadInstallMethod.value = jobData.data.installMethod || ''
+              downloadInspection.value = jobData.data.inspection || null
               showActionButtons.value = !!(jobData.data.downloadUrl || jobData.data.installUrl)
-              if (jobData.data.installUrl) {
-                addLog('[安装] 安装链接已生成')
+
+              if (jobData.data.otaInstallable && jobData.data.installUrl) {
+                addLog('[安装] OTA 安装链接已生成')
+              } else if (jobData.data.installMethod === 'download_only') {
+                addLog('[交付] 该包不支持 OTA 安装，仅提供下载')
               }
+
               const appStore = useAppStore()
               appStore.updateQueueItem(jobId, {
                 status: 'completed',
                 progress: 100,
                 downloadUrl: jobData.data.downloadUrl,
                 installUrl: jobData.data.installUrl,
-                fileSize: jobData.data.fileSize || 0
+                fileSize: jobData.data.fileSize || 0,
+                packageKind: jobData.data.packageKind,
+                otaInstallable: jobData.data.otaInstallable,
+                installMethod: jobData.data.installMethod,
+                inspection: jobData.data.inspection
               })
             }
           })
