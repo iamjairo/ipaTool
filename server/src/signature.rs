@@ -47,11 +47,14 @@ pub struct ManifestTargets {
 #[serde(rename_all = "camelCase")]
 pub struct IpaInspection {
     pub has_sc_info_manifest: bool,
+    pub has_embedded_mobileprovision: bool,
     pub declared_sinf_paths: Vec<String>,
     pub present_sinf_paths: Vec<String>,
     pub missing_sinf_paths: Vec<String>,
     pub encrypted_binaries: Vec<String>,
     pub direct_install_ok: bool,
+    pub blocked_reason: Option<String>,
+    pub recommended_action: Option<String>,
     pub summary: String,
 }
 
@@ -452,30 +455,57 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
     }
 
     let has_sc_info_manifest = !declared_sinf_paths.is_empty();
-    let direct_install_ok = missing_sinf_paths.is_empty();
-    let summary = if !missing_sinf_paths.is_empty() {
-        format!(
+    let has_embedded_mobileprovision = zip
+        .by_name(&format!("Payload/{}/embedded.mobileprovision", app_bundle_name))
+        .is_ok();
+
+    let mut blockers = Vec::new();
+    if !missing_sinf_paths.is_empty() {
+        blockers.push(format!(
             "包内声明了 {} 个 .sinf 目标，但缺少 {} 个：{}",
             declared_sinf_paths.len(),
             missing_sinf_paths.len(),
             missing_sinf_paths.join(", ")
-        )
-    } else if !encrypted_binaries.is_empty() {
-        format!(
-            "已检测到 {} 个加密二进制；声明的 .sinf 目标已齐全",
-            encrypted_binaries.len()
-        )
-    } else {
-        "未检测到缺失的 .sinf 目标".to_string()
+        ));
+    }
+    if !encrypted_binaries.is_empty() {
+        blockers.push(if has_embedded_mobileprovision {
+            format!(
+                "检测到 {} 个 FairPlay 加密二进制，这类包通常不是可直接侧载的成品 IPA",
+                encrypted_binaries.len()
+            )
+        } else {
+            format!(
+                "检测到 {} 个 FairPlay 加密二进制，且未发现 embedded.mobileprovision，这类包不能直接侧载，继续安装大概率黑屏或闪退",
+                encrypted_binaries.len()
+            )
+        });
+    } else if !has_embedded_mobileprovision {
+        blockers.push("包内未发现 embedded.mobileprovision，当前看起来不像已正确重签的可侧载 IPA".to_string());
+    }
+
+    let direct_install_ok = blockers.is_empty();
+    let blocked_reason = (!blockers.is_empty()).then(|| blockers.join("；"));
+    let recommended_action = blocked_reason
+        .as_ref()
+        .map(|_| "请先获取完整解密并正确重签（含全部 .appex）的 IPA，再重新上传或安装".to_string());
+    let summary = match (&blocked_reason, &recommended_action) {
+        (Some(reason), Some(action)) => format!("{}。{}。", reason, action),
+        (Some(reason), None) => reason.clone(),
+        _ if has_sc_info_manifest => "未检测到缺失的 .sinf 目标，可继续安装验证".to_string(),
+        _ => "未发现明显的 FairPlay / 签名阻塞，可继续安装验证".to_string(),
     };
 
     Ok(IpaInspection {
         has_sc_info_manifest,
+        has_embedded_mobileprovision,
         declared_sinf_paths,
         present_sinf_paths,
         missing_sinf_paths,
         encrypted_binaries,
         direct_install_ok,
+        blocked_reason,
+        recommended_action,
         summary,
     })
 }

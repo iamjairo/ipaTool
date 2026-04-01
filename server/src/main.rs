@@ -747,6 +747,16 @@ fn build_record_download_url(req: &HttpRequest, record_id: i64) -> String {
     format!("{}/api/public/download-records/{}/file", build_base_url(req), record_id)
 }
 
+fn inspection_blocks_install(inspection: &IpaInspection) -> bool {
+    !inspection.direct_install_ok
+}
+
+fn extract_record_id_from_download_url(download_url: &str) -> Option<i64> {
+    let marker = "/api/public/download-records/";
+    let rest = download_url.split(marker).nth(1)?;
+    let record_id = rest.split('/').next()?;
+    record_id.parse().ok()
+}
 
 fn build_record_install_url(req: &HttpRequest, record: &DownloadRecord, record_id: i64) -> Option<String> {
     let download_url = build_record_download_url(req, record_id);
@@ -2935,7 +2945,7 @@ async fn get_manifest(
 
 
 // Plist token 解析端点（仿 OpenList /i/:link_name.plist）
-async fn plist_from_token(path: web::Path<String>) -> impl Responder {
+async fn plist_from_token(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64;
     use base64::Engine as _;
 
@@ -2970,6 +2980,38 @@ async fn plist_from_token(path: web::Path<String>) -> impl Responder {
         Ok(v) => v.into_owned(),
         Err(_) => return HttpResponse::BadRequest().body("invalid url in plist token"),
     };
+
+    // Hard block: if this token points to a download record whose IPA is not directly side-loadable,
+    // stop before returning a plist. This prevents users from installing and then hitting black-screen crash.
+    if let Some(record_id) = extract_record_id_from_download_url(&link_str) {
+        let record = data
+            .db
+            .lock()
+            .unwrap()
+            .get_download_record(record_id)
+            .ok()
+            .flatten();
+
+        if let Some(record) = record {
+            if let Some(file_path) = record.file_path.clone() {
+                let path = PathBuf::from(file_path);
+                if path.exists() {
+                    if let Some(inspection) = inspect_existing_ipa(&path) {
+                        if inspection_blocks_install(&inspection) {
+                            let message = format!(
+                                "已拦截安装：{}",
+                                inspection.summary
+                            );
+                            return HttpResponse::Forbidden()
+                                .content_type("text/plain; charset=utf-8")
+                                .insert_header(("Cache-Control", "no-store"))
+                                .body(message);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let name_full = match urlencoding::decode(name_encode) {
         Ok(v) => v.into_owned(),
