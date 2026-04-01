@@ -730,7 +730,10 @@ impl AccountStore {
                     .and_then(|v| v.as_str())
                     .map(String::from),
                 email: Some(self.account_email.clone()),
-                region: result.get("region").and_then(|v| v.as_str()).map(String::from),
+                region: result
+                    .get("region")
+                    .and_then(|v| v.as_str())
+                    .map(String::from),
             };
             self.auth_info = Some(auth_info);
         }

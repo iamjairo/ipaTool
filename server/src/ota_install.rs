@@ -37,10 +37,7 @@ pub fn generate_plist(
     );
     item.insert("metadata".into(), Value::Dictionary(metadata));
 
-    root.insert(
-        "items".into(),
-        Value::Array(vec![Value::Dictionary(item)]),
-    );
+    root.insert("items".into(), Value::Array(vec![Value::Dictionary(item)]));
 
     let plist_value = Value::Dictionary(root);
     let mut plist_bytes = Vec::new();

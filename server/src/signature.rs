@@ -88,7 +88,10 @@ fn parse_sinf_entry(value: &serde_json::Value, fallback_index: usize) -> Option<
         return None;
     }
     Some(Sinf {
-        id: normalize_sinf_id(value.get("id").unwrap_or(&serde_json::Value::Null), fallback_index),
+        id: normalize_sinf_id(
+            value.get("id").unwrap_or(&serde_json::Value::Null),
+            fallback_index,
+        ),
         sinf,
     })
 }
@@ -104,7 +107,9 @@ fn ordered_unique_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> 
     ordered
 }
 
-fn find_app_bundle_name<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+fn find_app_bundle_name<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     for i in 0..zip.len() {
         let zip_name = zip.by_index(i)?.name().to_string();
         if zip_name.starts_with("Payload/") && zip_name.ends_with(".app/") {
@@ -176,7 +181,9 @@ fn read_manifest_targets<R: Read + Seek>(
     Ok(Some(manifest_targets_from_value(&manifest)))
 }
 
-fn decode_signatures(signatures: &[Sinf]) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+fn decode_signatures(
+    signatures: &[Sinf],
+) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     signatures
         .iter()
         .map(|signature| Ok(base64::engine::general_purpose::STANDARD.decode(&signature.sinf)?))
@@ -226,7 +233,9 @@ fn build_injection_plan(
         });
     }
 
-    if signatures.len() == manifest_targets.sinf_paths.len() && !manifest_targets.sinf_replication_paths.is_empty() {
+    if signatures.len() == manifest_targets.sinf_paths.len()
+        && !manifest_targets.sinf_replication_paths.is_empty()
+    {
         return Ok(SignatureApplyResult {
             applied_paths: Vec::new(),
             warning: Some(format!(
@@ -263,8 +272,8 @@ fn replace_zip_entries(
     // Writing into the existing Vec via Cursor can leave trailing bytes and corrupt the zip.
     let mut out = Vec::with_capacity(archive.len() + 1024);
     let mut new_archive = zip::ZipWriter::new(Cursor::new(&mut out));
-    let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let options: zip::write::FileOptions<'_, ()> =
+        zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     for i in 0..zip.len() {
         let mut file = zip.by_index(i)?;
@@ -394,7 +403,9 @@ fn macho_cryptid_one(bytes: &[u8]) -> Option<bool> {
     }
 }
 
-pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error::Error + Send + Sync>> {
+pub fn inspect_ipa_path(
+    path: &Path,
+) -> Result<IpaInspection, Box<dyn std::error::Error + Send + Sync>> {
     let mut zip = read_zip(&path.to_string_lossy())?;
     let app_bundle_name = find_app_bundle_name(&mut zip)?;
     let manifest_targets = read_manifest_targets(&mut zip, &app_bundle_name)?.unwrap_or_default();
@@ -414,7 +425,8 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
         if name.starts_with(&app_prefix) && name.ends_with(".sinf") {
             present_sinf_paths.push(name.trim_start_matches(&app_prefix).to_string());
         }
-        if name.starts_with(&app_prefix) && name.contains("/PlugIns/") && name.ends_with(".appex/") {
+        if name.starts_with(&app_prefix) && name.contains("/PlugIns/") && name.ends_with(".appex/")
+        {
             plugin_dirs.insert(name.trim_end_matches('/').to_string());
         }
     }
@@ -430,7 +442,10 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
     let mut encrypted_binaries = Vec::new();
     let app_info_path = format!("Payload/{}/Info.plist", app_bundle_name);
     if let Ok(Value::Dictionary(info)) = read_zip_plist(&mut zip, &app_info_path) {
-        if let Some(executable) = info.get("CFBundleExecutable").and_then(|value| value.as_string()) {
+        if let Some(executable) = info
+            .get("CFBundleExecutable")
+            .and_then(|value| value.as_string())
+        {
             let binary_path = format!("Payload/{}/{}", app_bundle_name, executable);
             if let Ok(binary) = read_zip_entry_bytes(&mut zip, &binary_path) {
                 if macho_cryptid_one(&binary).unwrap_or(false) {
@@ -443,11 +458,15 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
     for plugin_dir in ordered_unique_paths(plugin_dirs.into_iter()) {
         let info_path = format!("{}/Info.plist", plugin_dir);
         if let Ok(Value::Dictionary(info)) = read_zip_plist(&mut zip, &info_path) {
-            if let Some(executable) = info.get("CFBundleExecutable").and_then(|value| value.as_string()) {
+            if let Some(executable) = info
+                .get("CFBundleExecutable")
+                .and_then(|value| value.as_string())
+            {
                 let binary_path = format!("{}/{}", plugin_dir, executable);
                 if let Ok(binary) = read_zip_entry_bytes(&mut zip, &binary_path) {
                     if macho_cryptid_one(&binary).unwrap_or(false) {
-                        encrypted_binaries.push(binary_path.trim_start_matches("Payload/").to_string());
+                        encrypted_binaries
+                            .push(binary_path.trim_start_matches("Payload/").to_string());
                     }
                 }
             }
@@ -456,7 +475,10 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
 
     let has_sc_info_manifest = !declared_sinf_paths.is_empty();
     let has_embedded_mobileprovision = zip
-        .by_name(&format!("Payload/{}/embedded.mobileprovision", app_bundle_name))
+        .by_name(&format!(
+            "Payload/{}/embedded.mobileprovision",
+            app_bundle_name
+        ))
         .is_ok();
 
     let mut blockers = Vec::new();
@@ -481,7 +503,9 @@ pub fn inspect_ipa_path(path: &Path) -> Result<IpaInspection, Box<dyn std::error
             )
         });
     } else if !has_embedded_mobileprovision {
-        blockers.push("包内未发现 embedded.mobileprovision，当前看起来不像已正确重签的可侧载 IPA".to_string());
+        blockers.push(
+            "包内未发现 embedded.mobileprovision，当前看起来不像已正确重签的可侧载 IPA".to_string(),
+        );
     }
 
     let direct_install_ok = blockers.is_empty();
@@ -652,8 +676,8 @@ impl SignatureClient {
         // IMPORTANT: write to a fresh buffer, then replace `self.archive`.
         let mut out = Vec::with_capacity(self.archive.len() + 4096);
         let mut new_archive = zip::ZipWriter::new(Cursor::new(&mut out));
-        let options: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let options: zip::write::FileOptions<'_, ()> =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
         for i in 0..zip.len() {
             let mut file = zip.by_index(i).unwrap();
@@ -667,7 +691,9 @@ impl SignatureClient {
             new_archive.write_all(&buffer).unwrap();
         }
 
-        new_archive.start_file("iTunesMetadata.plist", options).unwrap();
+        new_archive
+            .start_file("iTunesMetadata.plist", options)
+            .unwrap();
         new_archive.write_all(metadata_content.as_bytes()).unwrap();
         let _ = new_archive.finish();
 
@@ -698,7 +724,12 @@ impl SignatureClient {
             apply_result
                 .applied_paths
                 .iter()
-                .map(|path| (format!("Payload/{}/{}", app_bundle_name, path), decoded_signatures[0].clone()))
+                .map(|path| {
+                    (
+                        format!("Payload/{}/{}", app_bundle_name, path),
+                        decoded_signatures[0].clone(),
+                    )
+                })
                 .collect::<Vec<_>>()
         } else {
             apply_result

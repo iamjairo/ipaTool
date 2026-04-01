@@ -235,7 +235,11 @@ pub fn sanitize_ipa_filename(name: &str) -> String {
     truncated
 }
 
-pub fn canonical_ipa_filename(display_name: &str, version: &str, bundle_id: Option<&str>) -> String {
+pub fn canonical_ipa_filename(
+    display_name: &str,
+    version: &str,
+    bundle_id: Option<&str>,
+) -> String {
     let safe_name = display_name.trim();
     let safe_version = version.trim();
     let safe_bundle_id = bundle_id.unwrap_or("").trim();
@@ -481,7 +485,11 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
     let output_file_name = canonical_ipa_filename(
         bundle_display_name,
         bundle_short_version,
-        if bundle_id.is_empty() { None } else { Some(bundle_id) },
+        if bundle_id.is_empty() {
+            None
+        } else {
+            Some(bundle_id)
+        },
     );
     let output_file_path = download_dir.join(output_file_name);
     let cache_dir = download_dir.join("cache");
@@ -604,7 +612,13 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     params.on_progress(DownloadProgress {
         phase: "finalize".to_string(),
-        message: format!("[finalize] 生成 OTA 文件名：{}", output_file_path.file_name().and_then(|v| v.to_str()).unwrap_or("download.ipa")),
+        message: format!(
+            "[finalize] 生成 OTA 文件名：{}",
+            output_file_path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or("download.ipa")
+        ),
         progress: None,
         file_size: None,
         downloaded: None,
