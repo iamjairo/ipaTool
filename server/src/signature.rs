@@ -774,57 +774,89 @@ impl SignatureClient {
             let value = plist::Value::Dictionary(dict);
             let mut buf = Vec::new();
             let options = plist::XmlWriteOptions::default();
-            plist::to_writer_xml_with_options(&mut buf, &value, &options)
-                .expect("Failed to serialize iTunesMetadata plist");
-            String::from_utf8(buf).expect("Invalid UTF-8 in iTunesMetadata")
+            if let Err(e) =
+                plist::to_writer_xml_with_options(&mut buf, &value, &options)
+            {
+                log::warn!("append_metadata: failed to serialize raw Apple metadata to plist: {e}, falling back to extracted fields");
+                return self.build_metadata_fallback();
+            }
+            match String::from_utf8(buf) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("append_metadata: raw Apple metadata produced non-UTF-8 plist: {e}, falling back to extracted fields");
+                    return self.build_metadata_fallback();
+                }
+            }
         } else {
-            let mut dict = plist::Dictionary::new();
-            if let Some(name) = &self.metadata.bundle_display_name {
-                dict.insert(
-                    "bundleDisplayName".to_string(),
-                    plist::Value::String(name.clone()),
-                );
-            }
-            if let Some(version) = &self.metadata.bundle_short_version_string {
-                dict.insert(
-                    "bundleShortVersionString".to_string(),
-                    plist::Value::String(version.clone()),
-                );
-            }
-            if let Some(bundle_id) = &self.metadata.bundle_id {
-                dict.insert(
-                    "bundleId".to_string(),
-                    plist::Value::String(bundle_id.clone()),
-                );
-            }
-            if let Some(artwork_url) = &self.metadata.artwork_url {
-                dict.insert(
-                    "artworkUrl".to_string(),
-                    plist::Value::String(artwork_url.clone()),
-                );
-            }
-            if let Some(artist_name) = &self.metadata.artist_name {
-                dict.insert(
-                    "artistName".to_string(),
-                    plist::Value::String(artist_name.clone()),
-                );
-            }
-            dict.insert(
-                "apple-id".to_string(),
-                plist::Value::String(self.email.clone()),
-            );
-            dict.insert(
-                "userName".to_string(),
-                plist::Value::String(self.email.clone()),
-            );
-
-            let value = plist::Value::Dictionary(dict);
-            let mut buf = Vec::new();
-            plist::to_writer_xml_with_options(&mut buf, &value, &plist::XmlWriteOptions::default())
-                .expect("Failed to serialize iTunesMetadata plist");
-            String::from_utf8(buf).expect("Invalid UTF-8 in iTunesMetadata")
+            return self.build_metadata_fallback();
         };
 
+        self.write_metadata_to_archive(&metadata_content)
+    }
+
+    /// Fallback: build iTunesMetadata.plist from the extracted SignatureMetadata fields.
+    fn build_metadata_fallback(&mut self) -> &mut Self {
+        let mut dict = plist::Dictionary::new();
+        if let Some(name) = &self.metadata.bundle_display_name {
+            dict.insert(
+                "bundleDisplayName".to_string(),
+                plist::Value::String(name.clone()),
+            );
+        }
+        if let Some(version) = &self.metadata.bundle_short_version_string {
+            dict.insert(
+                "bundleShortVersionString".to_string(),
+                plist::Value::String(version.clone()),
+            );
+        }
+        if let Some(bundle_id) = &self.metadata.bundle_id {
+            dict.insert(
+                "bundleId".to_string(),
+                plist::Value::String(bundle_id.clone()),
+            );
+        }
+        if let Some(artwork_url) = &self.metadata.artwork_url {
+            dict.insert(
+                "artworkUrl".to_string(),
+                plist::Value::String(artwork_url.clone()),
+            );
+        }
+        if let Some(artist_name) = &self.metadata.artist_name {
+            dict.insert(
+                "artistName".to_string(),
+                plist::Value::String(artist_name.clone()),
+            );
+        }
+        dict.insert(
+            "apple-id".to_string(),
+            plist::Value::String(self.email.clone()),
+        );
+        dict.insert(
+            "userName".to_string(),
+            plist::Value::String(self.email.clone()),
+        );
+
+        let value = plist::Value::Dictionary(dict);
+        let mut buf = Vec::new();
+        if let Err(e) =
+            plist::to_writer_xml_with_options(&mut buf, &value, &plist::XmlWriteOptions::default())
+        {
+            log::error!("append_metadata: fallback metadata serialization also failed: {e}");
+            // Nothing we can do — leave archive unchanged.
+            return self;
+        }
+        let metadata_content = match String::from_utf8(buf) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("append_metadata: fallback metadata produced non-UTF-8: {e}");
+                return self;
+            }
+        };
+
+        self.write_metadata_to_archive(&metadata_content)
+    }
+
+    fn write_metadata_to_archive(&mut self, metadata_content: &str) -> &mut Self {
         let reader = Cursor::new(self.archive.clone());
         let mut zip = match ZipArchive::new(reader) {
             Ok(z) => z,

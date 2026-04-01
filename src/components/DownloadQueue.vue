@@ -85,13 +85,11 @@
             <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">下载</el-button>
 
             <el-button v-if="record.fileExists && record.otaInstallable && record.installUrl" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
-
-            <el-tooltip v-else-if="record.fileExists && record.installMethod === 'download_only' && record.inspection" :content="record.inspection.summary" placement="top">
+            <el-tooltip v-else-if="record.fileExists && record.installMethod === 'download_only'" :content="record.inspection?.summary || ''" :disabled="!record.inspection?.summary" placement="top">
               <span>
                 <el-tag size="small" type="info">仅下载</el-tag>
               </span>
             </el-tooltip>
-            <el-tag v-else-if="record.fileExists && record.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
 
             <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">清理安装包</el-button>
             <el-button size="small" type="danger" plain @click="removeRecord(record.id)">删除记录</el-button>

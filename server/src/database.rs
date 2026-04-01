@@ -1103,6 +1103,50 @@ impl Database {
         .optional()
     }
 
+    pub fn get_download_record_by_file_path(
+        &self,
+        file_path: &str,
+    ) -> Result<Option<DownloadRecord>> {
+        let conn = self.connection.lock().unwrap();
+        conn.query_row(
+            "SELECT id, job_id, app_name, app_id, bundle_id, version, account_email, account_region,
+                    download_date, status, file_size, file_path, install_url, artwork_url,
+                    artist_name, progress, error, package_kind, ota_installable,
+                    install_method, inspection_json, created_at
+             FROM download_records
+             WHERE file_path = ?
+             ORDER BY id DESC LIMIT 1",
+            params![file_path],
+            |row| {
+                Ok(DownloadRecord {
+                    id: row.get(0)?,
+                    job_id: row.get(1)?,
+                    app_name: row.get(2)?,
+                    app_id: row.get(3)?,
+                    bundle_id: row.get(4)?,
+                    version: row.get(5)?,
+                    account_email: row.get(6)?,
+                    account_region: row.get(7)?,
+                    download_date: row.get(8)?,
+                    status: row.get(9)?,
+                    file_size: row.get(10)?,
+                    file_path: row.get(11)?,
+                    install_url: row.get(12)?,
+                    artwork_url: row.get(13)?,
+                    artist_name: row.get(14)?,
+                    progress: row.get(15)?,
+                    error: row.get(16)?,
+                    package_kind: row.get(17)?,
+                    ota_installable: row.get::<_, Option<i64>>(18)?.map(|value| value != 0),
+                    install_method: row.get(19)?,
+                    inspection_json: row.get(20)?,
+                    created_at: row.get(21)?,
+                })
+            },
+        )
+        .optional()
+    }
+
     pub fn delete_download_record(&self, id: i64) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         conn.execute("DELETE FROM download_records WHERE id = ?", params![id])?;
