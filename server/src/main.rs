@@ -17,10 +17,10 @@ use futures_util::{
     stream, StreamExt, TryStreamExt,
 };
 use ipa_webtool_services::{
-    download_ipa_with_account, generate_plist, get_license_error_message,
-    AccountStore, AdminUser, BatchItem, Database, DownloadManager, DownloadParams, InstallQuery,
-    JobEndEvent, JobEvent, JobLogEvent, JobProgressEvent, JobProgressPayload, JobState, JobStore,
-    NewSubscription,
+    canonical_ipa_filename, download_ipa_with_account, generate_plist, get_license_error_message,
+    inspect_ipa_path, AccountStore, AdminUser, BatchItem, Database, DownloadManager,
+    DownloadParams, InstallQuery, IpaInspection, JobEndEvent, JobEvent, JobLogEvent,
+    JobProgressEvent, JobProgressPayload, JobState, JobStore, NewSubscription,
 };
 use ipa_webtool_services::DownloadRecord;
 use reqwest::Client;
@@ -231,6 +231,7 @@ struct DownloadRecordView {
     error: Option<String>,
     created_at: Option<String>,
     file_exists: bool,
+    inspection: Option<IpaInspection>,
 }
 
 #[derive(Serialize)]
@@ -252,6 +253,7 @@ struct IpaArtifactView {
     record_id: Option<i64>,
     download_url: String,
     install_url: Option<String>,
+    inspection: Option<IpaInspection>,
 }
 
 #[derive(Clone)]
@@ -830,6 +832,81 @@ fn scan_download_artifacts(downloads_dir: &Path) -> Vec<DownloadArtifact> {
         artifacts.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
     }
     artifacts
+}
+
+fn inspect_existing_ipa(path: &Path) -> Option<IpaInspection> {
+    match inspect_ipa_path(path) {
+        Ok(inspection) => Some(inspection),
+        Err(error) => {
+            log::warn!("failed to inspect ipa {}: {}", path.display(), error);
+            None
+        }
+    }
+}
+
+fn normalize_download_record_artifact_paths(db: &Database, downloads_dir: &Path) {
+    let records = db.get_all_download_records().unwrap_or_default();
+    let canonical_root = match downloads_dir.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+
+    for mut record in records {
+        let Some(record_id) = record.id else {
+            continue;
+        };
+        let Some(bundle_id) = record.bundle_id.clone().filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let Some(version) = record.version.clone().filter(|value| !value.trim().is_empty()) else {
+            continue;
+        };
+        let Some(file_path) = record.file_path.clone() else {
+            continue;
+        };
+
+        let current_path = PathBuf::from(&file_path);
+        if !current_path.exists() {
+            continue;
+        }
+        let Ok(canonical_current) = current_path.canonicalize() else {
+            continue;
+        };
+        if !canonical_current.starts_with(&canonical_root) {
+            continue;
+        }
+
+        let current_name = canonical_current
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let expected_name = canonical_ipa_filename(&record.app_name, &version, Some(&bundle_id));
+
+        if current_name == expected_name {
+            continue;
+        }
+
+        let Some(parent_dir) = canonical_current.parent() else {
+            continue;
+        };
+        let target_path = parent_dir.join(&expected_name);
+        let final_path = if target_path.exists() {
+            target_path
+        } else {
+            if let Err(error) = std::fs::rename(&canonical_current, &target_path) {
+                log::warn!("failed to rename legacy ipa artifact {} -> {}: {}", canonical_current.display(), target_path.display(), error);
+                continue;
+            }
+            target_path
+        };
+
+        record.file_path = Some(final_path.to_string_lossy().to_string());
+        if let Some(size) = std::fs::metadata(&final_path).ok().map(|meta| meta.len() as i64) {
+            record.file_size = Some(size);
+        }
+        let _ = db.update_download_record(record_id, &record);
+    }
 }
 
 fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
@@ -1426,9 +1503,10 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
 
                             return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                                 "url": url,
-                                "fileName": format!("{}_{}.ipa",
+                                "fileName": canonical_ipa_filename(
                                     metadata.and_then(|m| m.get("bundleDisplayName")).and_then(|v| v.as_str()).unwrap_or("app"),
-                                    metadata.and_then(|m| m.get("bundleShortVersionString")).and_then(|v| v.as_str()).unwrap_or("1.0.0")
+                                    metadata.and_then(|m| m.get("bundleShortVersionString")).and_then(|v| v.as_str()).unwrap_or("1.0.0"),
+                                    metadata.and_then(|m| m.get("bundleId")).and_then(|v| v.as_str())
                                 ),
                                 "metadata": {
                                     "bundle_display_name": metadata.and_then(|m| m.get("bundleDisplayName")).and_then(|v| v.as_str()).unwrap_or(""),
@@ -2858,7 +2936,7 @@ async fn get_manifest(
 
 // Plist token 解析端点（仿 OpenList /i/:link_name.plist）
 async fn plist_from_token(path: web::Path<String>) -> impl Responder {
-    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64;
     use base64::Engine as _;
 
     let raw = path.into_inner();
@@ -3099,6 +3177,7 @@ async fn delete_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> i
 async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     {
         let db = data.db.lock().unwrap();
+        normalize_download_record_artifact_paths(&db, &data.downloads_dir);
         sync_download_records_from_filesystem(&db, &data.downloads_dir);
     }
 
@@ -3107,11 +3186,13 @@ async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> im
             let items = records
                 .into_iter()
                 .map(|record| {
-                    let file_exists = record
-                        .file_path
-                        .as_ref()
-                        .map(|path| Path::new(path).exists())
-                        .unwrap_or(false);
+                    let file_path_buf = record.file_path.as_ref().map(PathBuf::from);
+                    let file_exists = file_path_buf.as_ref().map(|path| path.exists()).unwrap_or(false);
+                    let inspection = if file_exists {
+                        file_path_buf.as_deref().and_then(inspect_existing_ipa)
+                    } else {
+                        None
+                    };
                     let record_id = record.id;
                     let download_url = record_id.map(|id| build_record_download_url(&req, id));
                     let install_url = record_id.and_then(|id| build_record_install_url(&req, &record, id));
@@ -3137,6 +3218,7 @@ async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> im
                         error: record.error,
                         created_at: record.created_at,
                         file_exists,
+                        inspection,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -3185,6 +3267,7 @@ async fn download_record_file(
 async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     let records = {
         let db = data.db.lock().unwrap();
+        normalize_download_record_artifact_paths(&db, &data.downloads_dir);
         sync_download_records_from_filesystem(&db, &data.downloads_dir);
         db.get_all_download_records().unwrap_or_default()
     };
@@ -3207,6 +3290,7 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
                 let record_id = record.id?;
                 build_record_install_url(&req, record, record_id)
             });
+            let inspection = inspect_existing_ipa(&artifact.path);
 
             IpaArtifactView {
                 id: artifact.id,
@@ -3230,6 +3314,7 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
                 record_id: record.and_then(|item| item.id),
                 download_url,
                 install_url,
+                inspection,
             }
         })
         .collect::<Vec<_>>();

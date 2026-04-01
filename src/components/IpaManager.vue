@@ -62,9 +62,12 @@
           <div class="artifact-path">{{ item.filePath }}</div>
           <div class="artifact-actions">
             <el-button type="primary" size="small" @click="download(item.downloadUrl)">下载</el-button>
-            <a v-if="item.installUrl" :href="item.installUrl" class="inline-block">
-              <el-button type="success" size="small">安装</el-button>
-            </a>
+            <el-tooltip v-if="item.installUrl && item.inspection && item.inspection.directInstallOk === false" :content="item.inspection.summary" placement="top">
+              <span>
+                <el-button type="success" size="small" disabled>安装</el-button>
+              </span>
+            </el-tooltip>
+            <el-button v-else-if="item.installUrl" type="success" size="small" @click="install(item.installUrl)">安装</el-button>
             <el-button v-else type="success" size="small" disabled>安装</el-button>
             <el-button type="danger" size="small" plain @click="removeArtifact(item)">删除</el-button>
           </div>
@@ -149,6 +152,48 @@ const loadArtifacts = async () => {
 }
 
 const download = (url) => window.open(url, '_blank', 'noopener')
+
+const rewriteToCurrentOrigin = (rawUrl) => {
+  const url = new URL(rawUrl, window.location.origin)
+  url.protocol = window.location.protocol
+  url.host = window.location.host
+  return url.toString()
+}
+
+const buildInstallUrl = (installUrl) => {
+  if (!installUrl) return null
+
+  try {
+    if (installUrl.startsWith('itms-services://')) {
+      const itmsMatch = installUrl.match(/itms-services:\/\/\?action=download-manifest&url=(.+)/)
+      if (!itmsMatch) return installUrl
+
+      const manifestUrl = rewriteToCurrentOrigin(decodeURIComponent(itmsMatch[1]))
+      return `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`
+    }
+
+    const url = new URL(installUrl, window.location.origin)
+    if (url.pathname === '/api/public/install' || url.pathname === '/api/install') {
+      const manifest = url.searchParams.get('manifest')
+      if (manifest) {
+        const rewrittenManifest = rewriteToCurrentOrigin(manifest)
+        return `itms-services://?action=download-manifest&url=${encodeURIComponent(rewrittenManifest)}`
+      }
+      return installUrl
+    }
+
+    return rewriteToCurrentOrigin(installUrl)
+  } catch {
+    return installUrl
+  }
+}
+
+const install = (installUrl) => {
+  const url = buildInstallUrl(installUrl)
+  if (url) {
+    window.location.href = url
+  }
+}
 
 const deleteArtifactById = async (id) => {
   const response = await fetch(`${API_BASE}/ipa-files/${id}`, {

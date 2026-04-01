@@ -48,9 +48,7 @@
           <div v-if="task.error" class="row-error">{{ task.error }}</div>
           <div class="row-actions">
             <el-button v-if="task.status === 'completed' && task.downloadUrl" type="primary" size="small" @click="download(task.downloadUrl)">下载</el-button>
-            <a v-if="task.status === 'completed' && task.installUrl" :href="buildInstallUrl(task.installUrl)" class="inline-block">
-              <el-button type="success" size="small">安装</el-button>
-            </a>
+            <el-button v-if="task.status === 'completed' && task.installUrl" type="success" size="small" @click="install(task.installUrl)">安装</el-button>
             <el-button size="small" type="danger" plain @click="removeTask(task.id)">{{ task.status === 'completed' || task.status === 'failed' ? '移除' : '取消' }}</el-button>
           </div>
         </div>
@@ -84,9 +82,12 @@
           <div v-if="record.error" class="row-error">{{ record.error }}</div>
           <div class="row-actions">
             <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">下载</el-button>
-            <a v-if="record.installUrl && record.fileExists" :href="buildInstallUrl(record.installUrl)" class="inline-block">
-              <el-button type="success" size="small">安装</el-button>
-            </a>
+            <el-tooltip v-if="record.installUrl && record.fileExists && record.inspection && record.inspection.directInstallOk === false" :content="record.inspection.summary" placement="top">
+              <span>
+                <el-button type="success" size="small" disabled>安装</el-button>
+              </span>
+            </el-tooltip>
+            <el-button v-else-if="record.installUrl && record.fileExists" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
             <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">清理安装包</el-button>
             <el-button size="small" type="danger" plain @click="removeRecord(record.id)">删除记录</el-button>
           </div>
@@ -324,31 +325,46 @@ const removeTask = (id) => {
 }
 const download = (url) => window.open(url, '_blank', 'noopener')
 
+const rewriteToCurrentOrigin = (rawUrl) => {
+  const url = new URL(rawUrl, window.location.origin)
+  url.protocol = window.location.protocol
+  url.host = window.location.host
+  return url.toString()
+}
+
 const buildInstallUrl = (installUrl) => {
   if (!installUrl) return null
 
-  // 解析 installUrl，提取 manifest URL
-  const itmsMatch = installUrl.match(/itms-services:\/\/\?action=download-manifest&url=(.+)/)
-  if (!itmsMatch) return installUrl
-
-  const encodedManifest = itmsMatch[1]
-  let manifestUrl
-
   try {
-    manifestUrl = decodeURIComponent(encodedManifest)
+    if (installUrl.startsWith('itms-services://')) {
+      const itmsMatch = installUrl.match(/itms-services:\/\/\?action=download-manifest&url=(.+)/)
+      if (!itmsMatch) return installUrl
+
+      const manifestUrl = rewriteToCurrentOrigin(decodeURIComponent(itmsMatch[1]))
+      return `itms-services://?action=download-manifest&url=${encodeURIComponent(manifestUrl)}`
+    }
+
+    const url = new URL(installUrl, window.location.origin)
+    if (url.pathname === '/api/public/install' || url.pathname === '/api/install') {
+      const manifest = url.searchParams.get('manifest')
+      if (manifest) {
+        const rewrittenManifest = rewriteToCurrentOrigin(manifest)
+        return `itms-services://?action=download-manifest&url=${encodeURIComponent(rewrittenManifest)}`
+      }
+      return installUrl
+    }
+
+    return rewriteToCurrentOrigin(installUrl)
   } catch {
     return installUrl
   }
+}
 
-  // 替换 manifest URL 中的 base_url 为前端当前域名
-  const origin = window.location.origin
-  const url = new URL(manifestUrl)
-  url.origin = origin
-
-  const newManifestUrl = url.toString()
-
-  // 重新编码并组装 installUrl
-  return `itms-services://?action=download-manifest&url=${encodeURIComponent(newManifestUrl)}`
+const install = (installUrl) => {
+  const url = buildInstallUrl(installUrl)
+  if (url) {
+    window.location.href = url
+  }
 }
 
 const statusTagType = (status) => {

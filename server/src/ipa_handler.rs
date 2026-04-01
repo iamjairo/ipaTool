@@ -1,4 +1,5 @@
 use crate::apple_auth::{AccountStore, AuthInfo, Store};
+use crate::SignatureClient;
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -184,7 +185,7 @@ fn get_artwork_from_map(metadata: &serde_json::Map<String, Value>) -> String {
     url_60.or(url_512).or(url_100).unwrap_or("").to_string()
 }
 
-fn sanitize_ipa_filename(name: &str) -> String {
+pub fn sanitize_ipa_filename(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
@@ -234,12 +235,64 @@ fn sanitize_ipa_filename(name: &str) -> String {
     truncated
 }
 
+pub fn canonical_ipa_filename(display_name: &str, version: &str, bundle_id: Option<&str>) -> String {
+    let safe_name = display_name.trim();
+    let safe_version = version.trim();
+    let safe_bundle_id = bundle_id.unwrap_or("").trim();
+
+    let raw = if safe_bundle_id.is_empty() {
+        format!("{}-{}.ipa", safe_name, safe_version)
+    } else {
+        format!("{}-{}@{}.ipa", safe_name, safe_version, safe_bundle_id)
+    };
+
+    sanitize_ipa_filename(&raw)
+}
+
 fn get_state(app: &std::collections::HashMap<String, Value>) -> Option<&Value> {
     app.get("_state")
 }
 
 fn get_song_list(app: &std::collections::HashMap<String, Value>) -> Option<&Value> {
     app.get("songList")
+}
+
+fn summarize_song_list_sinfs(song_list: &serde_json::Map<String, Value>) -> String {
+    let sinfs = match song_list.get("sinfs").and_then(|value| value.as_array()) {
+        Some(sinfs) => sinfs,
+        None => return "sinfs=missing".to_string(),
+    };
+
+    if sinfs.is_empty() {
+        return "sinfs=0".to_string();
+    }
+
+    let mut parts = Vec::with_capacity(sinfs.len());
+    for (index, sinf) in sinfs.iter().enumerate() {
+        let id = sinf
+            .get("id")
+            .and_then(|value| value.as_i64())
+            .map(|value| value.to_string())
+            .or_else(|| {
+                sinf.get("id")
+                    .and_then(|value| value.as_u64())
+                    .map(|value| value.to_string())
+            })
+            .or_else(|| {
+                sinf.get("id")
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string())
+            })
+            .unwrap_or_else(|| format!("idx{}", index));
+        let b64_len = sinf
+            .get("sinf")
+            .and_then(|value| value.as_str())
+            .map(|value| value.len())
+            .unwrap_or(0);
+        parts.push(format!("id={} len={}", id, b64_len));
+    }
+
+    format!("sinfs={} [{}]", sinfs.len(), parts.join(", "))
 }
 
 pub async fn download_ipa_with_account<S: AppleAuthService>(
@@ -388,6 +441,13 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         .as_object()
         .ok_or("Invalid song list format")?;
 
+    eprintln!(
+        "[download] appid={} version_id={} {}",
+        params.appid,
+        params.app_ver_id.unwrap_or("latest"),
+        summarize_song_list_sinfs(song_list)
+    );
+
     let file_url = song_list
         .get("URL")
         .and_then(|v| v.as_str())
@@ -418,12 +478,12 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     // OpenList 经验：iOS 16+ OTA 原生安装依赖文件名携带 @bundle_id。
     // App Store 下载得到的 IPA 已包含账号/授权信息，不在这里改写包体或补签。
-    let output_file_name = if bundle_id.is_empty() {
-        format!("{}_{}.ipa", bundle_display_name, bundle_short_version)
-    } else {
-        format!("{}_{}@{}.ipa", bundle_display_name, bundle_short_version, bundle_id)
-    };
-    let output_file_path = download_dir.join(sanitize_ipa_filename(&output_file_name));
+    let output_file_name = canonical_ipa_filename(
+        bundle_display_name,
+        bundle_short_version,
+        if bundle_id.is_empty() { None } else { Some(bundle_id) },
+    );
+    let output_file_path = download_dir.join(output_file_name);
     let cache_dir = download_dir.join("cache");
     fs::create_dir_all(&cache_dir).await?;
     clear_cache(&cache_dir).await?;
@@ -504,14 +564,43 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         final_file.write_all(&buffer).await?;
         fs::remove_file(&temp_output).await?;
     }
+    final_file.flush().await?;
+    drop(final_file);
 
     params.on_progress(DownloadProgress {
         phase: "package".to_string(),
-        message: "[package] 保留原始 IPA，不再注入 iTunesMetadata / SC_Info".to_string(),
+        message: "[package] 注入真实 iTunesMetadata / sinf（若 Apple 响应提供）".to_string(),
         progress: None,
         file_size: None,
         downloaded: None,
     });
+
+    let mut signature_client = SignatureClient::new(song_list_value, params.email)?;
+    signature_client.load_file(&output_file_path.to_string_lossy())?;
+    signature_client.append_metadata();
+    let signature_result = signature_client.append_signatures()?;
+    signature_client.write()?;
+
+    if !signature_result.applied_paths.is_empty() {
+        params.on_progress(DownloadProgress {
+            phase: "package".to_string(),
+            message: format!(
+                "[package] 已补齐 .sinf：{}",
+                signature_result.applied_paths.join(", ")
+            ),
+            progress: None,
+            file_size: None,
+            downloaded: None,
+        });
+    } else if let Some(warning) = signature_result.warning {
+        params.on_progress(DownloadProgress {
+            phase: "package".to_string(),
+            message: format!("[package] {}", warning),
+            progress: None,
+            file_size: None,
+            downloaded: None,
+        });
+    }
 
     params.on_progress(DownloadProgress {
         phase: "finalize".to_string(),
