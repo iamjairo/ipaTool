@@ -75,6 +75,7 @@ pub struct SignatureApplyResult {
 pub struct SignatureClient {
     archive: Vec<u8>,
     filename: String,
+    raw_metadata: Option<serde_json::Map<String, serde_json::Value>>,
     metadata: SignatureMetadata,
     signatures: Vec<Sinf>,
     email: String,
@@ -648,11 +649,45 @@ pub fn inspect_ipa_path(
     })
 }
 
+fn json_value_to_plist(value: &serde_json::Value) -> plist::Value {
+    match value {
+        serde_json::Value::String(s) => plist::Value::String(s.clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                plist::Value::Integer(plist::Integer::from(i))
+            } else if let Some(f) = n.as_f64() {
+                plist::Value::Real(f)
+            } else {
+                plist::Value::String(n.to_string())
+            }
+        }
+        serde_json::Value::Bool(b) => plist::Value::Boolean(*b),
+        serde_json::Value::Null => plist::Value::String("".to_string()),
+        serde_json::Value::Array(arr) => {
+            plist::Value::Array(arr.iter().map(json_value_to_plist).collect())
+        }
+        serde_json::Value::Object(map) => plist::Value::Dictionary(json_map_to_plist_dict(map)),
+    }
+}
+
+fn json_map_to_plist_dict(map: &serde_json::Map<String, serde_json::Value>) -> plist::Dictionary {
+    let mut dict = plist::Dictionary::new();
+    for (key, value) in map {
+        dict.insert(key.clone(), json_value_to_plist(value));
+    }
+    dict
+}
+
 impl SignatureClient {
     pub fn new(
         song_list_0: &serde_json::Value,
         email: &str,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let raw_metadata = song_list_0
+            .get("metadata")
+            .and_then(|value| value.as_object())
+            .cloned();
+
         let metadata = SignatureMetadata {
             bundle_display_name: song_list_0["metadata"]["bundleDisplayName"]
                 .as_str()
@@ -701,6 +736,7 @@ impl SignatureClient {
         Ok(SignatureClient {
             archive: Vec::new(),
             filename: String::new(),
+            raw_metadata,
             metadata,
             signatures,
             email: email.to_string(),
@@ -720,55 +756,74 @@ impl SignatureClient {
     }
 
     pub fn append_metadata(&mut self) -> &mut Self {
-        let mut dict = plist::Dictionary::new();
-        if let Some(name) = &self.metadata.bundle_display_name {
-            dict.insert(
-                "bundleDisplayName".to_string(),
-                plist::Value::String(name.clone()),
+        // Build metadata plist from Apple's raw response if available (matches ApplePackage behaviour),
+        // otherwise fall back to the extracted SignatureMetadata fields.
+        let metadata_content = if let Some(raw) = &self.raw_metadata {
+            let mut map = raw.clone();
+            map.insert(
+                "apple-id".to_string(),
+                serde_json::Value::String(self.email.clone()),
             );
-        }
-        if let Some(version) = &self.metadata.bundle_short_version_string {
-            dict.insert(
-                "bundleShortVersionString".to_string(),
-                plist::Value::String(version.clone()),
+            map.insert(
+                "userName".to_string(),
+                serde_json::Value::String(self.email.clone()),
             );
-        }
-        if let Some(bundle_id) = &self.metadata.bundle_id {
-            dict.insert(
-                "bundleId".to_string(),
-                plist::Value::String(bundle_id.clone()),
-            );
-        }
-        if let Some(artwork_url) = &self.metadata.artwork_url {
-            dict.insert(
-                "artworkUrl".to_string(),
-                plist::Value::String(artwork_url.clone()),
-            );
-        }
-        if let Some(artist_name) = &self.metadata.artist_name {
-            dict.insert(
-                "artistName".to_string(),
-                plist::Value::String(artist_name.clone()),
-            );
-        }
-        dict.insert(
-            "apple-id".to_string(),
-            plist::Value::String(self.email.clone()),
-        );
-        dict.insert(
-            "userName".to_string(),
-            plist::Value::String(self.email.clone()),
-        );
 
-        let metadata_plist = plist::Value::Dictionary(dict);
-        let mut buf = Vec::new();
-        let options = plist::XmlWriteOptions::default();
-        plist::to_writer_xml_with_options(&mut buf, &metadata_plist, &options)
-            .map_err(|e| format!("Failed to serialize plist: {}", e))
-            .unwrap();
-        let metadata_content = String::from_utf8(buf)
-            .map_err(|e| format!("Invalid UTF-8: {}", e))
-            .unwrap();
+            // Convert JSON map → plist Dictionary
+            let dict = json_map_to_plist_dict(&map);
+            let value = plist::Value::Dictionary(dict);
+            let mut buf = Vec::new();
+            let options = plist::XmlWriteOptions::default();
+            plist::to_writer_xml_with_options(&mut buf, &value, &options)
+                .expect("Failed to serialize iTunesMetadata plist");
+            String::from_utf8(buf).expect("Invalid UTF-8 in iTunesMetadata")
+        } else {
+            let mut dict = plist::Dictionary::new();
+            if let Some(name) = &self.metadata.bundle_display_name {
+                dict.insert(
+                    "bundleDisplayName".to_string(),
+                    plist::Value::String(name.clone()),
+                );
+            }
+            if let Some(version) = &self.metadata.bundle_short_version_string {
+                dict.insert(
+                    "bundleShortVersionString".to_string(),
+                    plist::Value::String(version.clone()),
+                );
+            }
+            if let Some(bundle_id) = &self.metadata.bundle_id {
+                dict.insert(
+                    "bundleId".to_string(),
+                    plist::Value::String(bundle_id.clone()),
+                );
+            }
+            if let Some(artwork_url) = &self.metadata.artwork_url {
+                dict.insert(
+                    "artworkUrl".to_string(),
+                    plist::Value::String(artwork_url.clone()),
+                );
+            }
+            if let Some(artist_name) = &self.metadata.artist_name {
+                dict.insert(
+                    "artistName".to_string(),
+                    plist::Value::String(artist_name.clone()),
+                );
+            }
+            dict.insert(
+                "apple-id".to_string(),
+                plist::Value::String(self.email.clone()),
+            );
+            dict.insert(
+                "userName".to_string(),
+                plist::Value::String(self.email.clone()),
+            );
+
+            let value = plist::Value::Dictionary(dict);
+            let mut buf = Vec::new();
+            plist::to_writer_xml_with_options(&mut buf, &value, &plist::XmlWriteOptions::default())
+                .expect("Failed to serialize iTunesMetadata plist");
+            String::from_utf8(buf).expect("Invalid UTF-8 in iTunesMetadata")
+        };
 
         let reader = Cursor::new(self.archive.clone());
         let mut zip = match ZipArchive::new(reader) {
@@ -999,6 +1054,7 @@ mod tests {
         let mut client = SignatureClient {
             archive,
             filename: String::new(),
+            raw_metadata: None,
             metadata: SignatureMetadata {
                 bundle_display_name: None,
                 bundle_short_version_string: None,
@@ -1076,6 +1132,7 @@ mod tests {
                     .unwrap()
                     .as_nanos()
             ),
+            raw_metadata: None,
             metadata: SignatureMetadata {
                 bundle_display_name: None,
                 bundle_short_version_string: None,
@@ -1115,5 +1172,86 @@ mod tests {
         assert_eq!(main_bytes, b"main-sinf");
         assert_eq!(widget_bytes, b"widget-sinf");
         assert_eq!(replication_bytes, b"widget-sinf");
+    }
+
+    #[test]
+    fn append_metadata_preserves_raw_apple_metadata_fields() {
+        let archive = write_zip(vec![
+            ("Payload/Test.app/", Vec::new()),
+            ("Payload/Test.app/Info.plist", info_plist("TestExec")),
+        ]);
+
+        let raw_metadata = serde_json::json!({
+            "bundleDisplayName": "TestApp",
+            "bundleShortVersionString": "3.2.1",
+            "bundleVersion": "321",
+            "bundleId": "com.test.app",
+            "artworkUrl60": "https://example.com/icon60.png",
+            "artworkUrl512": "https://example.com/icon512.png",
+            "artistName": "TestArtist",
+            "fileSizeBytes": 12345678,
+            "releaseDate": "2025-01-15T08:00:00Z",
+            "softwareVersionExternalIdentifiers": [{"externalVersionId":"v1"},{"externalVersionId":"v2"}],
+            "someExtraField": "extra-value"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+
+        let mut client = SignatureClient {
+            archive,
+            filename: String::new(),
+            raw_metadata: Some(raw_metadata),
+            metadata: SignatureMetadata {
+                bundle_display_name: None,
+                bundle_short_version_string: None,
+                bundle_id: None,
+                artwork_url: None,
+                artist_name: None,
+                apple_id: None,
+                user_name: None,
+            },
+            signatures: Vec::new(),
+            email: "tester@example.com".to_string(),
+        };
+
+        client.append_metadata();
+
+        let mut zip = ZipArchive::new(Cursor::new(client.archive)).unwrap();
+        let mut entry = zip.by_name("iTunesMetadata.plist").unwrap();
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content).unwrap();
+
+        let parsed = plist::from_bytes::<plist::Value>(&content).unwrap();
+        let dict = parsed.as_dictionary().expect("expected dictionary");
+
+        // Raw Apple fields preserved
+        assert_eq!(
+            dict.get("bundleDisplayName").and_then(|v| v.as_string()),
+            Some("TestApp")
+        );
+        assert_eq!(
+            dict.get("bundleVersion").and_then(|v| v.as_string()),
+            Some("321")
+        );
+        assert_eq!(
+            dict.get("fileSizeBytes")
+                .and_then(|v| v.as_signed_integer()),
+            Some(12345678)
+        );
+        assert_eq!(
+            dict.get("someExtraField").and_then(|v| v.as_string()),
+            Some("extra-value")
+        );
+
+        // Injected fields
+        assert_eq!(
+            dict.get("apple-id").and_then(|v| v.as_string()),
+            Some("tester@example.com")
+        );
+        assert_eq!(
+            dict.get("userName").and_then(|v| v.as_string()),
+            Some("tester@example.com")
+        );
     }
 }
