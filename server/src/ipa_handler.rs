@@ -103,16 +103,16 @@ pub fn get_license_error_message(result: &std::collections::HashMap<String, Valu
     let error_msg = format!("{} {}", customer_message, failure_type).to_lowercase();
 
     let license_error_map = [
-        ("license not found", "您尚未购买此应用，正在尝试免费获取..."),
-        ("not found", "未找到此应用，请检查 App ID 是否正确"),
-        ("not purchased", "您尚未购买此应用"),
-        ("未购买", "您尚未购买此应用"),
-        ("未找到", "未找到此应用"),
-        ("unauthorized", "无权下载此应用"),
-        ("invalid request", "无效的请求"),
-        ("item not found", "未找到此应用"),
-        ("store front mismatch", "账号区域与应用不匹配"),
-        ("store front error", "账号区域错误，请切换账号区域"),
+        ("license not found", "You have not purchased this app, attempting free acquisition..."),
+        ("not found", "App not found, please check the App ID"),
+        ("not purchased", "You have not purchased this app"),
+        ("not purchased", "You have not purchased this app"),
+        ("not found", "App not found"),
+        ("unauthorized", "Not authorized to download this app"),
+        ("invalid request", "Invalid request"),
+        ("item not found", "App not found"),
+        ("store front mismatch", "Account region does not match the app's region"),
+        ("store front error", "Account region error, please switch your account region"),
     ];
 
     for (key, message) in &license_error_map {
@@ -148,7 +148,7 @@ async fn download_chunk(
                 tokio::time::sleep(Duration::from_millis(RETRY_DELAY * (attempt as u64 + 1))).await;
                 continue;
             }
-            return Err(format!("无法获取区块: {}", response.status()).into());
+            return Err(format!("Failed to fetch chunk: {}", response.status()).into());
         }
 
         let mut file = fs::OpenOptions::new()
@@ -164,7 +164,7 @@ async fn download_chunk(
         return Ok(());
     }
 
-    Err("下载重试次数耗尽".into())
+    Err("Download retry limit exceeded".into())
 }
 
 async fn clear_cache(cache_dir: &Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -206,7 +206,7 @@ pub fn sanitize_ipa_filename(name: &str) -> String {
         return cleaned;
     }
 
-    // 超长文件名处理：保留 ".ipa" 后缀和 @bundle_id 部分，截断中间
+    // Filename truncation: preserve the ".ipa" extension and @bundle_id suffix, truncate the middle
     let extension = ".ipa";
     let bundle_id_suffix = cleaned.rfind('@').and_then(|pos| Some(&cleaned[pos..]));
     let base_len = if let Some(suffix) = bundle_id_suffix {
@@ -304,7 +304,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 ) -> Result<DownloadResult, Box<dyn std::error::Error + Send + Sync>> {
     params.on_progress(DownloadProgress {
         phase: "auth".to_string(),
-        message: "[auth] 查询下载信息".to_string(),
+        message: "[auth] Querying download info".to_string(),
         progress: None,
         file_size: None,
         downloaded: None,
@@ -327,7 +327,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
     if state != Some(&Value::String("success".to_string())) && is_session_error(&app) {
         params.on_progress(DownloadProgress {
             phase: "session".to_string(),
-            message: "[session] 检测到会话失效，尝试刷新...".to_string(),
+            message: "[session] Session expired, attempting refresh...".to_string(),
             progress: None,
             file_size: None,
             downloaded: None,
@@ -337,7 +337,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
             ok: false,
             file: None,
             metadata: None,
-            error: Some("会话已失效，请重新登录".to_string()),
+            error: Some("Session has expired, please sign in again".to_string()),
             needs_reauth: true,
             needs_purchase: false,
         });
@@ -352,15 +352,15 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     let is_license_error = error_msg.contains("license")
         || error_msg.contains("not found")
-        || error_msg.contains("未购买")
-        || error_msg.contains("未授权");
+        || error_msg.to_lowercase().contains("not purchased")
+        || error_msg.to_lowercase().contains("unauthorized");
 
     let current_state = get_state(&app);
     if current_state != Some(&Value::String("success".to_string())) && is_license_error {
         if params.auto_purchase {
             params.on_progress(DownloadProgress {
                 phase: "auth".to_string(),
-                message: "[purchase] 正在购买应用...".to_string(),
+                message: "[purchase] Purchasing app...".to_string(),
                 progress: None,
                 file_size: None,
                 downloaded: None,
@@ -385,7 +385,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
             params.on_progress(DownloadProgress {
                 phase: "auth".to_string(),
-                message: "[purchase] 购买成功，重新查询下载信息".to_string(),
+                message: "[purchase] Purchase successful, re-querying download info".to_string(),
                 progress: None,
                 file_size: None,
                 downloaded: None,
@@ -423,7 +423,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
     if get_state(&app) != Some(&Value::String("success".to_string())) {
         let error_msg = get_value_from_map(&app, "customerMessage")
             .and_then(|v: &Value| v.as_str())
-            .unwrap_or("下载失败")
+            .unwrap_or("Download failed")
             .to_string();
 
         return Ok(DownloadResult {
@@ -480,8 +480,8 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // OpenList 经验：iOS 16+ OTA 原生安装依赖文件名携带 @bundle_id。
-    // App Store 下载得到的 IPA 已包含账号/授权信息，不在这里改写包体或补签。
+    // OpenList convention: iOS 16+ OTA native install requires the filename to carry @bundle_id.
+    // IPAs downloaded from the App Store already contain account/entitlement data; no repackaging or re-signing is done here.
     let output_file_name = canonical_ipa_filename(
         bundle_display_name,
         bundle_short_version,
@@ -499,19 +499,19 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
     let response = reqwest::Client::new().get(file_url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!("无法获取文件: {}", response.status()).into());
+        return Err(format!("Failed to fetch file: {}", response.status()).into());
     }
 
     let file_size = response.content_length().unwrap_or(0);
     if file_size == 0 {
-        return Err("文件大小为 0，下载失败".into());
+        return Err("File size is 0, download failed".into());
     }
     let num_chunks = (file_size as f64 / CHUNK_SIZE as f64).ceil() as usize;
 
     params.on_progress(DownloadProgress {
         phase: "download-start".to_string(),
         message: format!(
-            "[download] 开始：{:.2}MB，分块={}",
+            "[download] Starting: {:.2}MB, chunks={}",
             file_size as f64 / 1024.0 / 1024.0,
             num_chunks
         ),
@@ -539,7 +539,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         params.on_progress(DownloadProgress {
             phase: "download-progress".to_string(),
             message: format!(
-                "[download] 进度 {:.2}MB / {:.2}MB",
+                "[download] Progress {:.2}MB / {:.2}MB",
                 downloaded as f64 / 1024.0 / 1024.0,
                 file_size as f64 / 1024.0 / 1024.0
             ),
@@ -551,7 +551,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     params.on_progress(DownloadProgress {
         phase: "merge".to_string(),
-        message: "[merge] 合并分块...".to_string(),
+        message: "[merge] Merging chunks...".to_string(),
         progress: None,
         file_size: None,
         downloaded: None,
@@ -577,7 +577,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     params.on_progress(DownloadProgress {
         phase: "package".to_string(),
-        message: "[package] 注入真实 iTunesMetadata / sinf（若 Apple 响应提供）".to_string(),
+        message: "[package] Injecting real iTunesMetadata / sinf (if provided by Apple response)".to_string(),
         progress: None,
         file_size: None,
         downloaded: None,
@@ -593,7 +593,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
         params.on_progress(DownloadProgress {
             phase: "package".to_string(),
             message: format!(
-                "[package] 已补齐 .sinf：{}",
+                "[package] .sinf injected: {}",
                 signature_result.applied_paths.join(", ")
             ),
             progress: None,
@@ -613,7 +613,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
     params.on_progress(DownloadProgress {
         phase: "finalize".to_string(),
         message: format!(
-            "[finalize] 生成 OTA 文件名：{}",
+            "[finalize] Generating OTA filename: {}",
             output_file_path
                 .file_name()
                 .and_then(|v| v.to_str())
@@ -640,7 +640,7 @@ pub async fn download_ipa_with_account<S: AppleAuthService>(
 
     params.on_progress(DownloadProgress {
         phase: "done".to_string(),
-        message: format!("[done] 产物：{}", output_file_path.to_string_lossy()),
+        message: format!("[done] Output: {}", output_file_path.to_string_lossy()),
         progress: Some(100.0),
         file_size: Some(file_size),
         downloaded: Some(downloaded),

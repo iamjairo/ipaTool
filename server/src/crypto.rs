@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
         let key_hex = hex::encode([42u8; 32]);
-        let plaintext = "hello world 密码测试";
+        let plaintext = "hello world password test";
         let (ct, iv, tag) = encrypt(plaintext, &key_hex).unwrap();
         let decrypted = decrypt(&ct, &iv, &tag, &key_hex).unwrap();
         assert_eq!(decrypted, plaintext);

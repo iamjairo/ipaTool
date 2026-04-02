@@ -143,6 +143,7 @@ struct AppleLoginRequest {
     password: String,
     mfa: Option<String>,
     save_credentials: Option<bool>,
+    region: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -191,7 +192,7 @@ struct ManifestQuery {
     jobId: Option<String>,
 }
 
-// 应用状态
+// Application state
 struct AppState {
     db: Arc<Mutex<Database>>,
     download_manager: Arc<DownloadManager>,
@@ -269,10 +270,10 @@ struct PendingMfaSession {
     created_at: chrono::DateTime<Utc>,
 }
 
-// 模拟的账号存储（生产环境应该使用数据库）
+// In-memory account store
 lazy_static::lazy_static! {
     static ref ACCOUNTS: RwLock<HashMap<String, AccountStore>> = RwLock::new(HashMap::new());
-    // MFA 第一轮失败后暂存 AccountStore（保留 GUID），等待用户提交验证码后复用
+    // Cache AccountStore after first MFA round (preserving GUID), reused when user submits verification code
     static ref PENDING_MFA: RwLock<HashMap<String, PendingMfaSession>> = RwLock::new(HashMap::new());
 }
 
@@ -333,18 +334,18 @@ async fn take_pending_mfa(email: &str, password: &str) -> Result<AccountStore, S
     };
 
     let pending_session = pending_session.ok_or_else(|| {
-        "验证码会话不存在或已丢失，请重新输入账号密码并再次登录以获取新的验证码".to_string()
+        "Verification session not found or lost, please re-enter your credentials and sign in again to get a new code".to_string()
     })?;
 
     if is_pending_mfa_expired(pending_session.created_at) {
         return Err(format!(
-            "验证码会话已超过 {} 分钟，请重新登录以获取新的验证码",
+            "Verification session expired after {} minutes, please sign in again to get a new code",
             PENDING_MFA_TTL_MINUTES
         ));
     }
 
     if pending_session.password_hash != hash_password(password) {
-        return Err("登录密码已变更，请重新输入账号密码并再次登录以重新发起验证".to_string());
+        return Err("Password has changed, please re-enter your credentials and sign in again to restart verification".to_string());
     }
 
     Ok(pending_session.account_store)
@@ -391,10 +392,10 @@ fn apple_auth_failure_details(
     let needs_mfa = bad_login_without_mfa || explicit_mfa_message || explicit_mfa_failure;
 
     let user_facing_msg = if bad_login_without_mfa {
-        "此账号需要二次验证，请在验证码输入框输入 6 位验证码后再次点击登录".to_string()
+        "This account requires two-factor authentication. Enter the 6-digit code and click Sign In again".to_string()
     } else if explicit_mfa_message || explicit_mfa_failure {
         if has_mfa {
-            "验证码无效、已过期，或当前验证会话已失效，请检查后重试".to_string()
+            "Verification code is invalid, expired, or the session has expired. Please try again".to_string()
         } else {
             customer_message.clone()
         }
@@ -402,18 +403,18 @@ fn apple_auth_failure_details(
         match customer_message.as_str() {
             "MZFinance.BadLogin.Configurator_message"
             | "MZFinance.BadLogin.Configurator.message" => {
-                "账号或密码错误，请检查后重试".to_string()
+                "Incorrect username or password, please try again".to_string()
             }
-            m if m.starts_with("MZFinance.BadLogin") => "账号或密码错误，请检查后重试".to_string(),
+            m if m.starts_with("MZFinance.BadLogin") => "Incorrect username or password, please try again".to_string(),
             m if m.contains("account.locked") || m.contains("account disabled") => {
-                "账号已被锁定或停用".to_string()
+                "Account is locked or disabled".to_string()
             }
             m if m.contains("rate.limit") || m.contains("too many") => {
-                "登录尝试过于频繁，请稍后再试".to_string()
+                "Too many login attempts, please try again later".to_string()
             }
             _ if !customer_message.is_empty() => customer_message.clone(),
             _ if !failure_type.is_empty() => failure_type.clone(),
-            _ => "登录失败，Apple 未返回具体错误信息".to_string(),
+            _ => "Login failed, Apple did not return a specific error message".to_string(),
         }
     };
 
@@ -447,7 +448,7 @@ fn clear_session_cookie() -> Cookie<'static> {
 
 fn unauthorized_response() -> HttpResponse {
     HttpResponse::Unauthorized().json(ApiResponse::<String>::error(
-        "未登录或登录已过期".to_string(),
+        "Not logged in or session has expired".to_string(),
     ))
 }
 
@@ -456,21 +457,21 @@ fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<Authentica
 
     let db = app_state.db.lock().map_err(|e| {
         log::error!("[auth:resolve] db lock failed: {:?}", e);
-        "认证服务暂时不可用".to_string()
+        "Authentication service temporarily unavailable".to_string()
     })?;
 
     let session = db
         .get_session(token)
         .map_err(|e| {
             log::error!("[auth:resolve] get_session failed: {}", e);
-            format!("查询登录态失败: {}", e)
+            format!("Failed to check login status: {}", e)
         })?
         .ok_or_else(|| {
             log::debug!(
                 "[auth:resolve] no valid session for token={}..",
                 &token[..8.min(token.len())]
             );
-            "未登录或登录已过期".to_string()
+            "Not logged in or session has expired".to_string()
         })?;
 
     let user = db
@@ -481,7 +482,7 @@ fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<Authentica
                 session.username,
                 e
             );
-            format!("查询管理员失败: {}", e)
+            format!("Failed to query admin user: {}", e)
         })?
         .ok_or_else(|| {
             let _ = db.delete_session(token);
@@ -489,7 +490,7 @@ fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<Authentica
                 "[auth:resolve] admin user not found: {}, session deleted",
                 session.username
             );
-            "管理员账号不存在".to_string()
+            "Admin account does not exist".to_string()
         })?;
 
     log::debug!("[auth:resolve] ok user={}", user.username);
@@ -508,12 +509,12 @@ impl FromRequest for AuthenticatedAdmin {
     fn from_request(req: &HttpRequest, _: &mut actix_web::dev::Payload) -> Self::Future {
         let app_state = match req.app_data::<web::Data<AppState>>() {
             Some(data) => data.clone(),
-            None => return ready(Err(ErrorUnauthorized("认证服务未初始化"))),
+            None => return ready(Err(ErrorUnauthorized("Authentication service not initialized"))),
         };
 
         let session_cookie = match req.cookie(ADMIN_SESSION_COOKIE) {
             Some(cookie) => cookie,
-            None => return ready(Err(ErrorUnauthorized("未登录或登录已过期"))),
+            None => return ready(Err(ErrorUnauthorized("Not logged in or session has expired"))),
         };
 
         ready(
@@ -557,19 +558,19 @@ where
     Ok(next.call(req).await?.map_into_left_body())
 }
 
-// 健康检查
+// Health check
 async fn health() -> impl Responder {
     HttpResponse::Ok().json(ApiResponse::<String>::success("OK".to_string()))
 }
 
-// 查询版本
+// Query versions
 async fn get_versions(query: web::Query<VersionQuery>) -> impl Responder {
     let appid = &query.appid;
     let region = query.region.as_deref().unwrap_or("US");
 
     let client = Client::new();
 
-    // 尝试第一个 API
+    // Try first API
     let url1 = format!(
         "https://api.timbrd.com/apple/app-version/index.php?id={}&country={}",
         appid, region
@@ -596,7 +597,7 @@ async fn get_versions(query: web::Query<VersionQuery>) -> impl Responder {
     let final_versions = if let Some(vers) = versions {
         vers
     } else {
-        // 尝试第二个 API
+        // Try second API
         let url2 = format!(
             "https://apis.bilin.eu.org/history/{}?country={}",
             appid, region
@@ -739,9 +740,9 @@ fn resolve_artifact_path(downloads_dir: &Path, artifact_id: &str) -> Option<Path
         }
     }
 
-    // 兼容历史 artifact id：旧实现把 `/` 和 `\\` 都替换成 `__`，
-    // 当文件名本身包含 `__` 时不可逆，因此这里通过重扫文件系统按旧规则比对，
-    // 而不是继续使用 `replace("__", "/")` 这种有歧义的反解方式。
+    // Compatibility with legacy artifact IDs: the old implementation replaced both `/` and `\\` with `__`.
+    // This is irreversible when a filename itself contains `__`, so here we re-scan the filesystem
+    // and compare using the old rules rather than using the ambiguous `replace("__", "/")` reversal.
     scan_download_artifacts(downloads_dir)
         .into_iter()
         .find(|artifact| {
@@ -864,11 +865,11 @@ fn persisted_inspection(record: &DownloadRecord) -> Option<IpaInspection> {
 }
 
 fn inspection_for_record(record: &DownloadRecord) -> Option<IpaInspection> {
-    // 优先读 DB 持久化结果，避免每次请求都重新 inspect ZIP
+    // Prefer DB cached result to avoid re-inspecting the ZIP on every request
     if let Some(cached) = persisted_inspection(record) {
         return Some(cached);
     }
-    // DB 没有，才做文件 inspect（用于 backfill）
+    // Fall back to file inspection only if not in DB (used for backfill)
     record
         .file_path
         .as_ref()
@@ -950,7 +951,7 @@ fn build_record_install_url(
         record.app_name.clone()
     };
 
-    // 仿 OpenList：对外暴露 /i/{token}.plist，但额外带上 bundle_version 以保留真实版本信息。
+    // Expose /i/{token}.plist like OpenList, with bundle_version appended to preserve the real version.
     let name_full = format!("{}@{}", title, bundle_id);
     let link_encode = urlencoding::encode(&download_url);
     let name_encode = urlencoding::encode(&name_full);
@@ -1131,7 +1132,7 @@ fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
             app_id: "unknown".to_string(),
             bundle_id: None,
             version: None,
-            account_email: "未知账号".to_string(),
+            account_email: "unknown account".to_string(),
             account_region: None,
             download_date: artifact.modified_at.map(|dt| dt.to_rfc3339()),
             status: "completed".to_string(),
@@ -1208,7 +1209,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
                 String::from_utf8_lossy(&body)
             );
             return HttpResponse::BadRequest()
-                .json(ApiResponse::<String>::error(format!("请求解析失败: {}", e)));
+                .json(ApiResponse::<String>::error(format!("Failed to parse request: {}", e)));
         }
     };
     let accounts = ACCOUNTS.read().await;
@@ -1228,7 +1229,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
                 req.token.chars().take(8).collect::<String>()
             );
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("无效的 token".to_string()));
+                .json(ApiResponse::<String>::error("Invalid token".to_string()));
         }
     };
     drop(accounts);
@@ -1250,13 +1251,13 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
                         .or(result.get("failureType"))
                         .or(result.get("message"))
                         .and_then(|value| value.as_str())
-                        .unwrap_or("下载失败")
+                        .unwrap_or("Download failed")
                         .to_string();
 
                     let is_license_error = error_message.to_lowercase().contains("license")
                         || error_message.to_lowercase().contains("not found")
-                        || error_message.contains("未购买")
-                        || error_message.contains("未找到");
+                        || error_message.to_lowercase().contains("not purchased")
+                        || error_message.to_lowercase().contains("not owned");
 
                     if is_license_error {
                         return HttpResponse::BadRequest().json(serde_json::json!({
@@ -1272,7 +1273,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
             }
             Err(error) => {
                 return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("创建任务失败: {}", error),
+                    format!("Failed to create task: {}", error),
                 ))
             }
         }
@@ -1281,7 +1282,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
     let job_id = Uuid::new_v4().to_string();
     eprintln!("[start-download-direct] job created: {}", job_id);
     let job = data.job_store.create_job(job_id.clone()).await;
-    job.append_log(format!("[job] 已创建任务 {}", job_id)).await;
+    job.append_log(format!("[job] Task created: {}", job_id)).await;
 
     let appid = req.appid.clone();
     let app_ver_id = req.appVerId.clone();
@@ -1307,7 +1308,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
     tokio::spawn(async move {
         let job_dir = downloads_dir.join("jobs").join(&job_id_for_task);
         if let Err(error) = tokio::fs::create_dir_all(&job_dir).await {
-            let message = format!("创建任务目录失败: {}", error);
+            let message = format!("Failed to create task directory: {}", error);
             job_for_task
                 .append_log(format!("[error] {}", message))
                 .await;
@@ -1317,7 +1318,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
 
         job_for_task.set_running().await;
         job_for_task
-            .append_log("[job] 开始下载任务".to_string())
+            .append_log("[job] Starting download task".to_string())
             .await;
 
         let progress_job = job_for_task.clone();
@@ -1346,7 +1347,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
             Ok(result) if result.ok => {
                 if let Some(file_path) = result.file {
                     job_for_task
-                        .append_log(format!("[ready] 文件已就绪：{}", file_path))
+                        .append_log(format!("[ready] File ready: {}", file_path))
                         .await;
                     job_for_task
                         .mark_ready(file_path.clone(), result.metadata.clone(), None)
@@ -1414,7 +1415,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
                         eprintln!("[record] Failed to save download record: {}", e);
                     }
                 } else {
-                    let message = "下载完成，但未找到产物文件".to_string();
+                    let message = "Download complete, but output file not found".to_string();
                     job_for_task
                         .append_log(format!("[error] {}", message))
                         .await;
@@ -1422,7 +1423,7 @@ async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> i
                 }
             }
             Ok(result) => {
-                let message = result.error.unwrap_or_else(|| "下载失败".to_string());
+                let message = result.error.unwrap_or_else(|| "Download failed".to_string());
                 job_for_task
                     .append_log(format!("[error] {}", message))
                     .await;
@@ -1452,7 +1453,7 @@ async fn progress_sse(
         .job_store
         .get(&query.jobId)
         .await
-        .ok_or_else(|| ErrorNotFound("任务不存在"))?;
+        .ok_or_else(|| ErrorNotFound("Task not found"))?;
 
     let snapshot = job.snapshot().await;
     let mut initial_events: Vec<Result<Bytes, Error>> = Vec::new();
@@ -1504,12 +1505,12 @@ async fn download_file(
     let file_path = if let Some(job) = data.job_store.get(&query.jobId).await {
         let snapshot = job.snapshot().await;
         if snapshot.status != "ready" {
-            return Err(ErrorNotFound("任务尚未就绪"));
+            return Err(ErrorNotFound("Task is not ready yet"));
         }
         snapshot
             .file_path
             .clone()
-            .ok_or_else(|| ErrorNotFound("下载文件不存在"))?
+            .ok_or_else(|| ErrorNotFound("Download file not found"))?
     } else {
         let record = data
             .db
@@ -1517,11 +1518,11 @@ async fn download_file(
             .unwrap()
             .get_download_record_by_job_id(&query.jobId)
             .map_err(ErrorInternalServerError)?
-            .ok_or_else(|| ErrorNotFound("任务不存在"))?;
+            .ok_or_else(|| ErrorNotFound("Task not found"))?;
         record
             .file_path
             .clone()
-            .ok_or_else(|| ErrorNotFound("下载文件不存在"))?
+            .ok_or_else(|| ErrorNotFound("Download file not found"))?
     };
 
     let path = PathBuf::from(&file_path);
@@ -1559,11 +1560,11 @@ async fn get_job_info(
                 Ok(Some(record)) => record,
                 Ok(None) => {
                     return HttpResponse::NotFound()
-                        .json(ApiResponse::<String>::error("任务不存在".to_string()))
+                        .json(ApiResponse::<String>::error("Task not found".to_string()))
                 }
                 Err(error) => {
                     return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                        format!("读取任务记录失败：{error}"),
+                        format!("Failed to read task record: {error}"),
                     ))
                 }
             };
@@ -1612,7 +1613,7 @@ async fn get_job_info(
                 "otaInstallable": decision.ota_installable,
                 "installMethod": decision.install_method,
                 "inspection": inspection,
-                "error": if file_exists { serde_json::Value::Null } else { serde_json::Value::String("任务记录存在，但安装包文件已丢失".to_string()) },
+                "error": if file_exists { serde_json::Value::Null } else { serde_json::Value::String("Task record exists but the installation package file is missing".to_string()) },
                 "metadata": serde_json::Value::Null,
                 "filePath": persisted_record.file_path,
                 "fileSize": file_size,
@@ -1726,7 +1727,7 @@ async fn get_job_info(
     })))
 }
 
-// 获取下载链接
+// Get download URL
 async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder {
     let accounts = ACCOUNTS.read().await;
     eprintln!(
@@ -1744,12 +1745,12 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
             query.token.chars().take(8).collect::<String>()
         );
         return HttpResponse::Unauthorized()
-            .json(ApiResponse::<String>::error("无效的 token".to_string()));
+            .json(ApiResponse::<String>::error("Invalid token".to_string()));
     }
 
     let account_store = account_store.unwrap();
 
-    // 调用 download_product
+    // Call download_product
     match account_store
         .download_product(&query.appid, query.appVerId.as_deref())
         .await
@@ -1761,11 +1762,11 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
                 .unwrap_or("failure");
 
             if state == "success" {
-                // 提取下载链接
+                // Extract download URL
                 if let Some(song_list) = result.get("songList").and_then(|sl| sl.as_array()) {
                     if let Some(first_song) = song_list.first() {
                         if let Some(url) = first_song.get("URL").and_then(|u| u.as_str()) {
-                            // 提取元数据
+                            // Extract metadata
                             let metadata = first_song.get("metadata").and_then(|m| m.as_object());
 
                             return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
@@ -1791,20 +1792,20 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
                     .get("customerMessage")
                     .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("无法获取下载链接");
+                    .unwrap_or("Failed to get download URL");
 
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg.to_string()))
             } else {
-                // 检查是否需要购买
+                // Check if purchase is required
                 let error_msg = result
                     .get("customerMessage")
                     .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("下载失败");
+                    .unwrap_or("Download failed");
 
                 let is_license_error = error_msg.to_lowercase().contains("license")
                     || error_msg.to_lowercase().contains("not found")
-                    || error_msg.contains("未购买");
+                    || error_msg.to_lowercase().contains("not purchased");
 
                 if is_license_error {
                     HttpResponse::BadRequest().json(serde_json::json!({
@@ -1819,7 +1820,7 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
             }
         }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "获取下载链接失败: {}",
+            "Failed to get download URL: {}",
             e
         ))),
     }
@@ -1831,7 +1832,7 @@ async fn claim_app(req: web::Json<ClaimRequest>) -> impl Responder {
         Some(account) => account,
         None => {
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("无效的 token".to_string()))
+                .json(ApiResponse::<String>::error("Invalid token".to_string()))
         }
     };
 
@@ -1892,9 +1893,6 @@ async fn claim_app(req: web::Json<ClaimRequest>) -> impl Responder {
                             lowered.contains("license not found")
                                 || lowered.contains("not purchased")
                                 || lowered.contains("not found")
-                                || verify_error.contains("未购买")
-                                || verify_error.contains("未领取")
-                                || verify_error.contains("未找到")
                         };
 
                         last_verify_error = verify_error;
@@ -1904,22 +1902,22 @@ async fn claim_app(req: web::Json<ClaimRequest>) -> impl Responder {
                     }
                     Err(e) => {
                         return HttpResponse::InternalServerError().json(
-                            ApiResponse::<String>::error(format!("领取后校验失败: {}", e)),
+                            ApiResponse::<String>::error(format!("Verification failed after claim: {}", e)),
                         );
                     }
                 }
             }
 
             let error_msg = if last_verify_error.is_empty() {
-                "Apple 尚未确认领取成功，请稍后刷新或重试".to_string()
+                "Apple has not confirmed the claim yet, please refresh or try again later".to_string()
             } else {
-                format!("Apple 正在同步领取状态，请稍后重试：{}", last_verify_error)
+                format!("Apple is still syncing the claim status, please try again later: {}", last_verify_error)
             };
 
             HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg))
         }
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("领取失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Claim failed: {}", e))),
     }
 }
 
@@ -1929,7 +1927,7 @@ async fn get_purchase_status(query: web::Query<PurchaseStatusQuery>) -> impl Res
         Some(account) => account,
         None => {
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("无效的 token".to_string()))
+                .json(ApiResponse::<String>::error("Invalid token".to_string()))
         }
     };
 
@@ -1957,17 +1955,14 @@ async fn get_purchase_status(query: web::Query<PurchaseStatusQuery>) -> impl Res
                 .or(result.get("failureType"))
                 .or(result.get("message"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("下载失败")
+                .unwrap_or("Download failed")
                 .to_string();
 
             let lowered = error_msg.to_lowercase();
             let is_license_error = lowered.contains("license")
                 || lowered.contains("not found")
                 || lowered.contains("not purchased")
-                || lowered.contains("not owned")
-                || error_msg.contains("未购买")
-                || error_msg.contains("未领取")
-                || error_msg.contains("未找到");
+                || lowered.contains("not owned");
 
             HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                 "purchased": false,
@@ -1977,50 +1972,50 @@ async fn get_purchase_status(query: web::Query<PurchaseStatusQuery>) -> impl Res
             })))
         }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "查询购买状态失败: {}",
+            "Failed to check purchase status: {}",
             e
         ))),
     }
 }
 
-// 下载 IPA
+// Download IPA
 async fn download_ipa(
     req: web::Json<DownloadRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    // 验证 token
+    // Validate token
     let accounts = ACCOUNTS.read().await;
     let _account_store = accounts.get(&req.token);
 
     if _account_store.is_none() {
         return HttpResponse::Unauthorized()
-            .json(ApiResponse::<String>::error("无效的 token".to_string()));
+            .json(ApiResponse::<String>::error("Invalid token".to_string()));
     }
 
     drop(accounts);
 
-    // 创建下载目录
+    // Create download directory
     let download_dir = data.downloads_dir.clone();
     if tokio::fs::create_dir_all(&download_dir).await.is_err() {
         return HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error("创建下载目录失败".to_string()));
+            .json(ApiResponse::<String>::error("Failed to create download directory".to_string()));
     }
 
-    // 获取下载 URL
+    // Get download URL
     let url = &req.url;
 
-    // 解析 URL 获取文件名
+    // Parse URL to get filename
     let filename = url.split("/").last().unwrap_or("app.ipa");
     let filepath = download_dir.join(filename).to_string_lossy().to_string();
 
-    // 开始下载
+    // Start download
     match download_file_with_progress(url, &filepath).await {
         Ok(metadata) => HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
             "file": filepath,
             "metadata": metadata
         }))),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("下载失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Download failed: {}", e))),
     }
 }
 
@@ -2036,7 +2031,7 @@ async fn download_file_with_progress(
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!("HTTP 错误: {}", response.status()).into());
+        return Err(format!("HTTP error: {}", response.status()).into());
     }
 
     let total_size = response.content_length().unwrap_or(0);
@@ -2050,10 +2045,10 @@ async fn download_file_with_progress(
 
     if total_size > 0 {
         let progress = (downloaded as f64 / total_size as f64) * 100.0;
-        log::info!("下载完成: {:.1}% ({}/{})", progress, downloaded, total_size);
+        log::info!("Download complete: {:.1}% ({}/{})", progress, downloaded, total_size);
     }
 
-    // 返回元数据
+    // Return metadata
     Ok(serde_json::json!({
         "bundle_display_name": "Downloaded App",
         "bundle_short_version_string": "1.0.0",
@@ -2091,7 +2086,7 @@ fn sanitize_upload_filename(name: &str) -> String {
     }
 }
 
-// 上传 IPA（手动上传到服务器）
+// Upload IPA (manual upload to server)
 async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl Responder {
     const MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
@@ -2099,7 +2094,7 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
     let uploads_dir = data.downloads_dir.join("uploads");
     if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
         return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "创建上传目录失败: {}",
+            "Failed to create upload directory: {}",
             e
         )));
     }
@@ -2117,7 +2112,7 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
 
         if !filename.to_lowercase().ends_with(".ipa") {
             return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "只能上传 .ipa 文件".to_string(),
+                "Only .ipa files can be uploaded".to_string(),
             ));
         }
 
@@ -2131,7 +2126,7 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
             Ok(file) => file,
             Err(e) => {
                 return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("创建上传文件失败: {}", e),
+                    format!("Failed to create upload file: {}", e),
                 ));
             }
         };
@@ -2141,13 +2136,13 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
             if saved_file_size > MAX_UPLOAD_BYTES {
                 let _ = tokio::fs::remove_file(&target_path).await;
                 return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                    "上传文件不能超过 2GB".to_string(),
+                    "Upload file cannot exceed 2GB".to_string(),
                 ));
             }
             if let Err(e) = f.write_all(&chunk).await {
                 let _ = tokio::fs::remove_file(&target_path).await;
                 return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("写入上传文件失败: {}", e),
+                    format!("Failed to write upload file: {}", e),
                 ));
             }
         }
@@ -2158,7 +2153,7 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
 
     let Some(file_path) = saved_file_path else {
         return HttpResponse::BadRequest()
-            .json(ApiResponse::<String>::error("未找到上传文件".to_string()));
+            .json(ApiResponse::<String>::error("No upload file found".to_string()));
     };
 
     let file_name = saved_file_name.unwrap_or_else(|| "upload.ipa".to_string());
@@ -2177,7 +2172,7 @@ async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl R
             app_id: "uploaded".to_string(),
             bundle_id: None,
             version: None,
-            account_email: "手动上传".to_string(),
+            account_email: "manual upload".to_string(),
             account_region: None,
             download_date: Some(Utc::now().to_rfc3339()),
             status: "completed".to_string(),
@@ -2244,7 +2239,7 @@ async fn app_meta(query: web::Query<AppMetaQuery>) -> impl Responder {
         Ok(response) => {
             if !response.status().is_success() {
                 return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    "lookup API 返回错误".to_string(),
+                    "lookup API returned an error".to_string(),
                 ));
             }
 
@@ -2258,22 +2253,22 @@ async fn app_meta(query: web::Query<AppMetaQuery>) -> impl Responder {
                         HttpResponse::Ok().json(ApiResponse::success(format_itunes_app(app)))
                     } else {
                         HttpResponse::NotFound()
-                            .json(ApiResponse::<String>::error("未找到应用元数据".to_string()))
+                            .json(ApiResponse::<String>::error("App metadata not found".to_string()))
                     }
                 }
                 Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("解析应用元数据失败: {}", e),
+                    format!("Failed to parse app metadata: {}", e),
                 )),
             }
         }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "获取应用元数据失败: {}",
+            "Failed to fetch app metadata: {}",
             e
         ))),
     }
 }
 
-// 搜索应用
+// Search apps
 async fn search_app(
     query: web::Query<std::collections::HashMap<String, String>>,
 ) -> impl Responder {
@@ -2298,11 +2293,11 @@ async fn search_app(
 
     if term.is_empty() {
         return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-            "搜索关键词不能为空".to_string(),
+            "Search keyword cannot be empty".to_string(),
         ));
     }
 
-    // 调用 Apple Search API
+    // Call Apple Search API
     let url = format!(
         "https://itunes.apple.com/search?term={}&country={}&media={}&limit={}",
         urlencoding::encode(term),
@@ -2320,7 +2315,7 @@ async fn search_app(
                         if let Some(results) = json.get("resultCount").and_then(|v| v.as_u64()) {
                             if results > 0 {
                                 if let Some(apps) = json.get("results").and_then(|v| v.as_array()) {
-                                    // 转换为我们的格式
+                                    // Convert to our format
                                     let formatted_apps: Vec<serde_json::Value> =
                                         apps.iter().map(format_itunes_app).collect();
 
@@ -2330,31 +2325,31 @@ async fn search_app(
                             }
                         }
 
-                        // 没有找到结果
+                        // No results found
                         HttpResponse::Ok().json(ApiResponse::<Vec<Value>>::success(vec![]))
                     }
                     Err(e) => {
-                        log::error!("解析搜索结果失败: {}", e);
+                        log::error!("Failed to parse search results: {}", e);
                         HttpResponse::InternalServerError()
-                            .json(ApiResponse::<String>::error("解析搜索结果失败".to_string()))
+                            .json(ApiResponse::<String>::error("Failed to parse search results".to_string()))
                     }
                 }
             } else {
-                log::error!("搜索 API 返回错误: {}", response.status());
+                log::error!("Search API returned error: {}", response.status());
                 HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    "搜索 API 返回错误".to_string(),
+                    "Search API returned an error".to_string(),
                 ))
             }
         }
         Err(e) => {
-            log::error!("搜索请求失败: {}", e);
+            log::error!("Search request failed: {}", e);
             HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("搜索请求失败: {}", e)))
+                .json(ApiResponse::<String>::error(format!("Search request failed: {}", e)))
         }
     }
 }
 
-// 登录
+// Sign in
 async fn apple_login(
     req: web::Json<AppleLoginRequest>,
     data: web::Data<AppState>,
@@ -2368,8 +2363,8 @@ async fn apple_login(
         mfa_code.as_ref().map(|s| s.len()).unwrap_or(0)
     );
 
-    // 如果有 MFA code，优先复用第一轮暂存的 AccountStore（保留 GUID）
-    // 否则创建新的
+    // If MFA code is present, reuse the cached AccountStore from the first round (preserving GUID)
+    // otherwise create a new one
     let mut account_store = if has_mfa {
         match take_pending_mfa(&req.email, &req.password).await {
             Ok(store) => {
@@ -2409,10 +2404,10 @@ async fn apple_login(
             );
 
             if state == "success" {
-                // 清理可能残留的 pending MFA 条目
+                // Clear any leftover pending MFA entries
                 clear_pending_mfa(&req.email).await;
 
-                // 生成 token
+                // Generate token
                 let token = uuid::Uuid::new_v4().to_string();
                 let dsid = result
                     .get("dsPersonId")
@@ -2420,19 +2415,23 @@ async fn apple_login(
                     .unwrap_or("")
                     .to_string();
 
-                let mut region_for_response = resolved_account_region(&result, None);
+                // User-supplied region hint (normalized), used as fallback when Apple doesn't return one
+                let user_region_hint = req.region.as_deref().and_then(normalize_region_code);
+                let mut region_for_response = resolved_account_region(&result, user_region_hint.clone());
 
-                // 存储账号到内存
+                // Store account in memory
                 let mut accounts = ACCOUNTS.write().await;
                 accounts.insert(token.clone(), account_store);
 
-                // 持久化账号到 DB
+                // Persist account to DB
                 if let Ok(db) = data.db.lock() {
                     let existing_region = db
                         .get_latest_account_region_by_email(&req.email)
                         .ok()
                         .flatten();
-                    let region = resolved_account_region(&result, existing_region);
+                    // Priority: Apple API result → user-supplied hint → existing DB region
+                    let fallback = user_region_hint.or(existing_region);
+                    let region = resolved_account_region(&result, fallback);
                     region_for_response = region.clone();
                     let db_account = ipa_webtool_services::Account {
                         id: None,
@@ -2447,7 +2446,7 @@ async fn apple_login(
                     };
                     let _ = db.save_account(&db_account);
 
-                    // 可选：加密保存凭证
+                    // Optional: save credentials encrypted
                     if req.save_credentials.unwrap_or(false) {
                         if let Ok(enc_key) =
                             ipa_webtool_services::crypto::ensure_encryption_key(&db)
@@ -2502,7 +2501,7 @@ async fn apple_login(
                 );
 
                 if needs_mfa && !has_mfa {
-                    // 第一轮：暂存 AccountStore 保留 GUID，等用户提交验证码
+                    // First round: cache AccountStore preserving GUID, wait for user to submit verification code
                     save_pending_mfa(&req.email, &req.password, account_store).await;
 
                     log::info!("Saved pending MFA session for {}", req.email);
@@ -2539,21 +2538,21 @@ async fn apple_login(
             let err_msg = e.to_string();
             log::error!("Apple auth exception for {}: {}", req.email, err_msg);
 
-            // 如果是 JSON 解析错误，说明 Apple 返回了非 JSON 响应
+            // If it's a JSON parse error, Apple returned a non-JSON response
             if err_msg.contains("error decoding response body")
                 || err_msg.contains("expected value")
             {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(
-                    "登录请求被 Apple 拒绝，请检查网络、账号密码，或者尝试使用应用专用密码登录"
+                    "Login request was rejected by Apple. Please check your network, credentials, or try using an app-specific password"
                         .to_string(),
                 ))
             } else if err_msg.contains("timed out") || err_msg.contains("deadline") {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(
-                    "连接 Apple 超时，请检查网络环境".to_string(),
+                    "Connection to Apple timed out, please check your network".to_string(),
                 ))
             } else {
                 HttpResponse::Ok().json(ApiResponse::<String>::error(format!(
-                    "登录失败: {}",
+                    "Login failed: {}",
                     err_msg
                 )))
             }
@@ -2561,7 +2560,7 @@ async fn apple_login(
     }
 }
 
-// 获取已登录的 Apple 账号列表
+// Get list of signed-in Apple accounts
 async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
     let accounts = ACCOUNTS.read().await;
     let mut list: Vec<serde_json::Value> = Vec::new();
@@ -2619,44 +2618,44 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
         }));
     }
 
-    // 这里只返回当前内存中仍然有效的登录会话。
-    // DB 中残留但尚未恢复到 ACCOUNTS 的记录不应伪装成“已登录账号”，
-    // 否则前端会拿着陈旧 token 去做下载/刷新，得到“无效的 token”。
+    // Only return login sessions that are currently active in memory.
+    // Records remaining in DB that have not been restored to ACCOUNTS should not masquerade as logged-in accounts
+    // — otherwise the frontend would use stale tokens for downloads/refreshes and receive "Invalid token".
     HttpResponse::Ok().json(ApiResponse::success(list))
 }
 
-// 删除 Apple 账号
+// Delete Apple account
 async fn delete_account(token: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let token = token.into_inner();
 
-    // 从内存删除
+    // Remove from memory
     let mut accounts = ACCOUNTS.write().await;
     let removed_account = accounts.remove(&token);
     let email = removed_account.as_ref().map(|a| a.account_email.clone());
 
-    // 从 DB 删除
+    // Remove from DB
     if let Ok(db) = data.db.lock() {
         let _ = db.delete_account(&token);
-        // 同时删除该 email 的凭证
+        // Also delete credentials for this email
         if let Some(email) = email {
             let _ = db.delete_credentials(&email);
         }
     }
 
     if removed_account.is_some() {
-        HttpResponse::Ok().json(ApiResponse::success("已删除"))
+        HttpResponse::Ok().json(ApiResponse::success("Deleted"))
     } else {
-        HttpResponse::Ok().json(ApiResponse::success("已删除（仅数据库记录）"))
+        HttpResponse::Ok().json(ApiResponse::success("Deleted (database record only)"))
     }
 }
 
-// 获取已保存的凭证邮箱列表（不返回密码）
+// Get list of saved credential emails (passwords not returned)
 async fn get_credentials_list(data: web::Data<AppState>) -> impl Responder {
     let db = match data.db.lock() {
         Ok(db) => db,
         Err(_) => {
             return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+                .json(ApiResponse::<String>::error("Database unavailable".to_string()))
         }
     };
 
@@ -2669,18 +2668,18 @@ async fn get_credentials_list(data: web::Data<AppState>) -> impl Responder {
             HttpResponse::Ok().json(ApiResponse::success(emails))
         }
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to get credentials: {}", e))),
     }
 }
 
-// 自动登录所有保存的凭证
+// Auto-login all saved credentials
 async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
     let (credentials, enc_key) = {
         let db = match data.db.lock() {
             Ok(db) => db,
             Err(_) => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+                    .json(ApiResponse::<String>::error("Database unavailable".to_string()))
             }
         };
 
@@ -2688,7 +2687,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
             Ok(c) => c,
             Err(e) => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error(format!("获取凭证失败: {}", e)))
+                    .json(ApiResponse::<String>::error(format!("Failed to get credentials: {}", e)))
             }
         };
 
@@ -2696,7 +2695,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
             Ok(k) => k,
             Err(e) => {
                 return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                    format!("加密密钥初始化失败: {}", e),
+                    format!("Failed to initialize encryption key: {}", e),
                 ))
             }
         };
@@ -2709,13 +2708,13 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
     let mut failed = Vec::new();
 
     let accounts = ACCOUNTS.read().await;
-    // 收集已登录的邮箱列表
+    // Collect list of logged-in email addresses
     let logged_in_emails: std::collections::HashSet<String> =
         accounts.values().map(|a| a.account_email.clone()).collect();
     drop(accounts);
 
     for cred in &credentials {
-        // 解密密码
+        // Decrypt password
         let db2 = match data.db.lock() {
             Ok(d) => d,
             Err(_) => continue,
@@ -2728,13 +2727,13 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
         ) {
             Ok(p) => p,
             Err(_) => {
-                failed.push(serde_json::json!({ "email": cred.email, "error": "解密失败" }));
+                failed.push(serde_json::json!({ "email": cred.email, "error": "Decryption failed" }));
                 continue;
             }
         };
         drop(db2);
 
-        // 检查是否已登录
+        // Check if already logged in
         if logged_in_emails.contains(&cred.email) {
             success.push(serde_json::json!({
                 "email": cred.email,
@@ -2743,7 +2742,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
             continue;
         }
 
-        // 尝试登录
+        // Attempt login
         let mut store = AccountStore::new(&cred.email);
         match store.authenticate(&password, None).await {
             Ok(result) => {
@@ -2764,7 +2763,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
 
                     let mut region_for_response = resolved_account_region(&result, None);
 
-                    // 持久化
+                    // Persist
                     if let Ok(db) = data.db.lock() {
                         let existing_region = db
                             .get_latest_account_region_by_email(&cred.email)
@@ -2798,7 +2797,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
                         .get("customerMessage")
                         .or(result.get("failureType"))
                         .and_then(|v| v.as_str())
-                        .unwrap_or("登录失败");
+                        .unwrap_or("Login failed");
 
                     if err_msg == "MZFinance.BadLogin.Configurator_message"
                         || err_msg.contains("verification code")
@@ -2822,7 +2821,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
     })))
 }
 
-// 刷新账号会话（重新认证）
+// Refresh account session (re-authenticate)
 async fn refresh_login(
     req: web::Json<serde_json::Value>,
     data: web::Data<AppState>,
@@ -2831,17 +2830,17 @@ async fn refresh_login(
         Some(t) => t.to_string(),
         None => {
             return HttpResponse::BadRequest()
-                .json(ApiResponse::<String>::error("缺少 token".to_string()))
+                .json(ApiResponse::<String>::error("Missing token".to_string()))
         }
     };
 
-    // 查找现有账号
+    // Find existing account
     let accounts = ACCOUNTS.read().await;
     let email = match accounts.get(&token) {
         Some(store) => store.account_email.clone(),
         None => {
             return HttpResponse::NotFound()
-                .json(ApiResponse::<String>::error("账号不存在".to_string()))
+                .json(ApiResponse::<String>::error("Account not found".to_string()))
         }
     };
     drop(accounts);
@@ -2851,7 +2850,7 @@ async fn refresh_login(
             Ok(db) => db,
             Err(_) => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("数据库不可用".to_string()))
+                    .json(ApiResponse::<String>::error("Database unavailable".to_string()))
             }
         };
 
@@ -2859,7 +2858,7 @@ async fn refresh_login(
             Ok(Some(c)) => c,
             _ => {
                 return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                    "未找到保存的密码，无法自动刷新。请重新登录。".to_string(),
+                    "No saved password found, cannot auto-refresh. Please sign in again.".to_string(),
                 ))
             }
         };
@@ -2868,7 +2867,7 @@ async fn refresh_login(
             Ok(k) => k,
             Err(e) => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error(format!("加密密钥失败: {}", e)))
+                    .json(ApiResponse::<String>::error(format!("Failed to load encryption key: {}", e)))
             }
         };
 
@@ -2881,12 +2880,12 @@ async fn refresh_login(
             Ok(password) => password,
             Err(_) => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("解密密码失败".to_string()))
+                    .json(ApiResponse::<String>::error("Failed to decrypt password".to_string()))
             }
         }
     };
 
-    // 重新认证
+    // Re-authenticate
     let mut store = AccountStore::new(&email);
     match store.authenticate(&password, None).await {
         Ok(result) => {
@@ -2897,7 +2896,7 @@ async fn refresh_login(
             if state == "success" {
                 let mut region_for_response = resolved_account_region(&result, None);
 
-                // 更新内存中的账号
+                // Update account in memory
                 let mut accounts = ACCOUNTS.write().await;
                 accounts.insert(token.clone(), store);
 
@@ -2919,12 +2918,12 @@ async fn refresh_login(
                     .get("customerMessage")
                     .or(result.get("failureType"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or("刷新失败");
+                    .unwrap_or("Refresh failed");
                 HttpResponse::BadRequest().json(ApiResponse::<String>::error(err_msg.to_string()))
             }
         }
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("刷新失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Refresh failed: {}", e))),
     }
 }
 
@@ -2940,7 +2939,7 @@ async fn admin_login(
     if username.is_empty() || password.is_empty() {
         log::warn!("[auth:login] rejected: empty username or password");
         return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-            "用户名和密码不能为空".to_string(),
+            "Username and password cannot be empty".to_string(),
         ));
     }
 
@@ -2949,7 +2948,7 @@ async fn admin_login(
         Err(_) => {
             log::error!("[auth:login] failed to acquire db lock");
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                "认证服务暂时不可用".to_string(),
+                "Authentication service temporarily unavailable".to_string(),
             ));
         }
     };
@@ -2959,12 +2958,12 @@ async fn admin_login(
         Ok(None) => {
             log::warn!("[auth:login] user not found: {}", username);
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("用户名或密码错误".to_string()));
+                .json(ApiResponse::<String>::error("Incorrect username or password".to_string()));
         }
         Err(e) => {
             log::error!("[auth:login] db error looking up user {}: {}", username, e);
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                format!("查询管理员失败: {}", e),
+                format!("Failed to query admin user: {}", e),
             ));
         }
     };
@@ -2972,7 +2971,7 @@ async fn admin_login(
     if user.password_hash != hash_password(password) {
         log::warn!("[auth:login] wrong password for user: {}", username);
         return HttpResponse::Unauthorized()
-            .json(ApiResponse::<String>::error("用户名或密码错误".to_string()));
+            .json(ApiResponse::<String>::error("Incorrect username or password".to_string()));
     }
 
     let token = Uuid::new_v4().to_string();
@@ -2983,7 +2982,7 @@ async fn admin_login(
     if let Err(e) = db.create_session(&token, &user.username, &session_expires_at()) {
         log::error!("[auth:login] create session failed for {}: {}", username, e);
         return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "创建登录态失败: {}",
+            "Failed to create session: {}",
             e
         )));
     }
@@ -3005,16 +3004,16 @@ async fn logout(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
         match data.db.lock() {
             Ok(db) => {
                 if let Err(e) = db.delete_session(session_cookie.value()) {
-                    log::warn!("清理登录态失败: {}", e);
+                    log::warn!("Failed to cleanup session: {}", e);
                 }
             }
-            Err(_) => log::warn!("认证服务暂时不可用，跳过服务端 session 清理"),
+            Err(_) => log::warn!("Authentication service temporarily unavailable, skipping server-side session cleanup"),
         }
     }
 
     HttpResponse::Ok()
         .cookie(clear_session_cookie())
-        .json(ApiResponse::success("已退出登录".to_string()))
+        .json(ApiResponse::success("Signed out".to_string()))
 }
 
 async fn me(admin: AuthenticatedAdmin) -> impl Responder {
@@ -3038,12 +3037,12 @@ async fn change_password(
 
     if req.new_password.trim().is_empty() {
         return HttpResponse::BadRequest()
-            .json(ApiResponse::<String>::error("新密码不能为空".to_string()));
+            .json(ApiResponse::<String>::error("New password cannot be empty".to_string()));
     }
 
     if req.current_password == req.new_password {
         return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-            "新密码不能与当前密码相同".to_string(),
+            "New password cannot be the same as the current password".to_string(),
         ));
     }
 
@@ -3055,7 +3054,7 @@ async fn change_password(
                 admin.username
             );
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                "认证服务暂时不可用".to_string(),
+                "Authentication service temporarily unavailable".to_string(),
             ));
         }
     };
@@ -3065,12 +3064,12 @@ async fn change_password(
         Ok(None) => {
             log::warn!("[auth:change-pwd] user not found: {}", admin.username);
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("管理员账号不存在".to_string()));
+                .json(ApiResponse::<String>::error("Admin account does not exist".to_string()));
         }
         Err(e) => {
             log::error!("[auth:change-pwd] db error for {}: {}", admin.username, e);
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                format!("查询管理员失败: {}", e),
+                format!("Failed to query admin user: {}", e),
             ));
         }
     };
@@ -3081,7 +3080,7 @@ async fn change_password(
             admin.username
         );
         return HttpResponse::BadRequest()
-            .json(ApiResponse::<String>::error("当前密码不正确".to_string()));
+            .json(ApiResponse::<String>::error("Current password is incorrect".to_string()));
     }
 
     // Determine final username before any DB writes
@@ -3113,7 +3112,7 @@ async fn change_password(
                 e
             );
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                format!("修改密码/用户名失败: {}", e),
+                format!("Failed to update password/username: {}", e),
             ));
         }
     };
@@ -3124,7 +3123,7 @@ async fn change_password(
     }))
 }
 
-// 生成 plist 清单文件
+// Generate plist manifest file
 async fn get_manifest(
     req: HttpRequest,
     query: web::Query<ManifestQuery>,
@@ -3135,14 +3134,14 @@ async fn get_manifest(
             Some(job) => job,
             None => {
                 return HttpResponse::NotFound()
-                    .json(ApiResponse::<String>::error("任务不存在".to_string()))
+                    .json(ApiResponse::<String>::error("Task not found".to_string()))
             }
         };
         let snapshot = job.snapshot().await;
 
         if snapshot.status != "ready" {
             return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "任务尚未完成，无法生成 manifest".to_string(),
+                "Task is not complete yet, cannot generate manifest".to_string(),
             ));
         }
 
@@ -3164,9 +3163,9 @@ async fn get_manifest(
             let reason = inspection
                 .as_ref()
                 .map(|value| value.summary.clone())
-                .unwrap_or_else(|| "该 IPA 不支持 OTA 安装".to_string());
+                .unwrap_or_else(|| "This IPA does not support OTA installation".to_string());
             return HttpResponse::Forbidden().json(ApiResponse::<String>::error(format!(
-                "已拦截 manifest 生成：{}",
+                "Installation blocked — manifest generation intercepted: {}",
                 reason
             )));
         }
@@ -3175,7 +3174,7 @@ async fn get_manifest(
             Some(metadata) => metadata,
             None => {
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("任务缺少元数据".to_string()))
+                    .json(ApiResponse::<String>::error("Task is missing metadata".to_string()))
             }
         };
 
@@ -3196,14 +3195,14 @@ async fn get_manifest(
             Some(url) => url.clone(),
             None => {
                 return HttpResponse::BadRequest()
-                    .json(ApiResponse::<String>::error("url 不能为空".to_string()))
+                    .json(ApiResponse::<String>::error("url cannot be empty".to_string()))
             }
         };
         let bundle_id = match &query.bundle_id {
             Some(bundle_id) => bundle_id.clone(),
             None => {
                 return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                    "bundle_id 不能为空".to_string(),
+                    "bundle_id cannot be empty".to_string(),
                 ))
             }
         };
@@ -3211,7 +3210,7 @@ async fn get_manifest(
             Some(bundle_version) => bundle_version.clone(),
             None => {
                 return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                    "bundle_version 不能为空".to_string(),
+                    "bundle_version cannot be empty".to_string(),
                 ))
             }
         };
@@ -3219,7 +3218,7 @@ async fn get_manifest(
             Some(title) => title.clone(),
             None => {
                 return HttpResponse::BadRequest()
-                    .json(ApiResponse::<String>::error("title 不能为空".to_string()))
+                    .json(ApiResponse::<String>::error("title cannot be empty".to_string()))
             }
         };
 
@@ -3234,14 +3233,14 @@ async fn get_manifest(
         Err(error) => {
             log::error!("Failed to generate plist: {}", error);
             HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "生成 plist 失败: {}",
+                "Failed to generate plist: {}",
                 error
             )))
         }
     }
 }
 
-// Plist token 解析端点（仿 OpenList /i/:link_name.plist）
+// Plist token parsing endpoint (mimicking OpenList /i/:link_name.plist)
 async fn plist_from_token(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64;
     use base64::Engine as _;
@@ -3295,7 +3294,7 @@ async fn plist_from_token(path: web::Path<String>, data: web::Data<AppState>) ->
                 if path.exists() {
                     if let Some(inspection) = inspect_existing_ipa(&path) {
                         if inspection_blocks_install(&inspection) {
-                            let message = format!("已拦截安装：{}", inspection.summary);
+                            let message = format!("Installation intercepted: {}", inspection.summary);
                             return HttpResponse::Forbidden()
                                 .content_type("text/plain; charset=utf-8")
                                 .insert_header(("Cache-Control", "no-store"))
@@ -3341,7 +3340,7 @@ async fn plist_from_token(path: web::Path<String>, data: web::Data<AppState>) ->
     }
 }
 
-// OTA 安装端点 - 跳转到 itms-services 触发 iOS 原生安装
+// OTA install endpoint - redirect to itms-services to trigger iOS native install
 async fn install(query: web::Query<InstallQuery>) -> impl Responder {
     log::info!("OTA install request, manifest URL: {}", query.manifest);
 
@@ -3355,7 +3354,7 @@ async fn install(query: web::Query<InstallQuery>) -> impl Responder {
         .finish()
 }
 
-// ============ 批量下载相关端点 ============
+// ============ Batch download endpoints ============
 
 #[derive(Deserialize)]
 struct BatchDownloadRequest {
@@ -3371,23 +3370,23 @@ struct BatchItemRequest {
     account_email: String,
 }
 
-// 开始批量下载
+// Start batch download
 async fn start_batch_download(
     req: web::Json<BatchDownloadRequest>,
     data: web::Data<AppState>,
 ) -> impl Responder {
     if req.task_name.trim().is_empty() {
         return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-            "task_name 不能为空".to_string(),
+            "task_name cannot be empty".to_string(),
         ));
     }
 
     if req.items.is_empty() {
         return HttpResponse::BadRequest()
-            .json(ApiResponse::<String>::error("items 不能为空".to_string()));
+            .json(ApiResponse::<String>::error("items cannot be empty".to_string()));
     }
 
-    // 从全局 ACCOUNTS 中按 email 找到已认证的 AccountStore
+    // Find authenticated AccountStore from global ACCOUNTS by email
     let accounts = ACCOUNTS.read().await;
 
     let mut batch_items: Vec<BatchItem<AccountStore>> = Vec::with_capacity(req.items.len());
@@ -3402,7 +3401,7 @@ async fn start_batch_download(
             Some(a) => a,
             None => {
                 return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
-                    "账号未登录或不存在: {}",
+                    "Account not logged in or does not exist: {}",
                     item.account_email
                 )));
             }
@@ -3410,7 +3409,7 @@ async fn start_batch_download(
 
         if account.auth_info.is_none() {
             return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!(
-                "账号尚未完成认证: {}",
+                "Account authentication not complete: {}",
                 item.account_email
             )));
         }
@@ -3419,7 +3418,7 @@ async fn start_batch_download(
             store: account,
             app_id: item.app_id.clone(),
             app_name: item.app_name.clone(),
-            // 这里的 version 实际是 appVerId（external_identifier），用于 download_product 的 app_ver_id 参数
+            // The `version` field is actually the appVerId (external_identifier), used as the app_ver_id parameter for download_product
             version: item.version.clone(),
             account_email: item.account_email.clone(),
         });
@@ -3438,33 +3437,33 @@ async fn start_batch_download(
             "totalCount": req.items.len(),
         }))),
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "创建批量任务失败: {}",
+            "Failed to create batch task: {}",
             e
         ))),
     }
 }
 
-// 获取所有批量下载任务
+// Get all batch download tasks
 async fn get_batch_tasks(data: web::Data<AppState>) -> impl Responder {
     match data.db.lock().unwrap().get_batch_tasks() {
         Ok(tasks) => HttpResponse::Ok().json(ApiResponse::success(tasks)),
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "获取批量任务失败: {}",
+            "Failed to get batch tasks: {}",
             e
         ))),
     }
 }
 
-// 获取单个批量下载任务详情
+// Get individual batch download task details
 async fn get_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> impl Responder {
     let batch_id = path.into_inner();
 
-    // 获取任务信息
+    // Get task info
     let task = match data.db.lock().unwrap().get_batch_tasks() {
         Ok(tasks) => tasks.into_iter().find(|t| t.id == Some(batch_id)),
         Err(e) => {
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "获取批量任务失败: {}",
+                "Failed to get batch tasks: {}",
                 e
             )))
         }
@@ -3472,17 +3471,17 @@ async fn get_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> impl
 
     if task.is_none() {
         return HttpResponse::NotFound()
-            .json(ApiResponse::<String>::error("批量任务不存在".to_string()));
+            .json(ApiResponse::<String>::error("Batch task not found".to_string()));
     }
 
     let task = task.unwrap();
 
-    // 获取任务项目
+    // Get task items
     let items = match data.db.lock().unwrap().get_batch_items(batch_id) {
         Ok(items) => items,
         Err(e) => {
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "获取批量任务项失败: {}",
+                "Failed to get batch task items: {}",
                 e
             )))
         }
@@ -3494,22 +3493,22 @@ async fn get_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> impl
     })))
 }
 
-// 删除批量下载任务
+// Delete batch download task
 async fn delete_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> impl Responder {
     let batch_id = path.into_inner();
 
     match data.db.lock().unwrap().delete_batch_task(batch_id) {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("批量任务已删除".to_string())),
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("Batch task deleted".to_string())),
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "删除批量任务失败: {}",
+            "Failed to delete batch task: {}",
             e
         ))),
     }
 }
 
-// ============ 下载记录端点 ============
+// ============ Download record endpoints ============
 
-// 获取所有下载记录
+// Get all download records
 async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     {
         let db = data.db.lock().unwrap();
@@ -3524,7 +3523,7 @@ async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> im
             Err(e) => {
                 log::error!("[records] failed to get records: {}", e);
                 return HttpResponse::InternalServerError()
-                    .json(ApiResponse::<String>::error("获取下载记录失败".to_string()));
+                    .json(ApiResponse::<String>::error("Failed to get download records".to_string()));
             }
         }
     };
@@ -3622,11 +3621,11 @@ async fn download_record_file(
         .unwrap()
         .get_download_record(id)
         .map_err(ErrorInternalServerError)?
-        .ok_or_else(|| ErrorNotFound("记录不存在"))?;
+        .ok_or_else(|| ErrorNotFound("Record not found"))?;
     let file_path = record
         .file_path
         .clone()
-        .ok_or_else(|| ErrorNotFound("记录未保存文件路径"))?;
+        .ok_or_else(|| ErrorNotFound("Record has no saved file path"))?;
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -3752,7 +3751,7 @@ async fn download_ipa_file(
 ) -> Result<fs::NamedFile, Error> {
     let artifact_id = path.into_inner();
     let file_path = resolve_artifact_path(&data.downloads_dir, &artifact_id)
-        .ok_or_else(|| ErrorNotFound("IPA 文件不存在"))?;
+        .ok_or_else(|| ErrorNotFound("IPA file not found"))?;
     let file_name = file_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -3774,13 +3773,13 @@ async fn delete_ipa_file(path: web::Path<String>, data: web::Data<AppState>) -> 
         Some(path) => path,
         None => {
             return HttpResponse::NotFound()
-                .json(ApiResponse::<String>::error("IPA 文件不存在".to_string()))
+                .json(ApiResponse::<String>::error("IPA file not found".to_string()))
         }
     };
 
     if let Err(error) = tokio::fs::remove_file(&file_path).await {
         return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "删除文件失败: {}",
+            "Failed to delete file: {}",
             error
         )));
     }
@@ -3792,25 +3791,25 @@ async fn delete_ipa_file(path: web::Path<String>, data: web::Data<AppState>) -> 
         .unwrap()
         .delete_download_record_by_file_path(&file_path_string);
 
-    HttpResponse::Ok().json(ApiResponse::success("IPA 已删除".to_string()))
+    HttpResponse::Ok().json(ApiResponse::success("IPA deleted".to_string()))
 }
 
-// 删除下载记录
+// Delete download record
 async fn delete_download_record(path: web::Path<i64>, data: web::Data<AppState>) -> impl Responder {
     let id = path.into_inner();
 
     match data.db.lock().unwrap().delete_download_record(id) {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("记录已删除".to_string())),
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("Record deleted".to_string())),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("删除记录失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to delete record: {}", e))),
     }
 }
 
 async fn clear_download_records(data: web::Data<AppState>) -> impl Responder {
     match data.db.lock().unwrap().clear_all_download_records() {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("记录已清空".to_string())),
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("Records cleared".to_string())),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("清空记录失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to clear records: {}", e))),
     }
 }
 
@@ -3824,11 +3823,11 @@ async fn cleanup_download_record_file(
         Ok(Some(record)) => record,
         Ok(None) => {
             return HttpResponse::NotFound()
-                .json(ApiResponse::<String>::error("记录不存在".to_string()))
+                .json(ApiResponse::<String>::error("Record not found".to_string()))
         }
         Err(e) => {
             return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!("查询记录失败: {}", e)))
+                .json(ApiResponse::<String>::error(format!("Failed to query record: {}", e)))
         }
     };
 
@@ -3836,7 +3835,7 @@ async fn cleanup_download_record_file(
         Some(path) if !path.is_empty() => path,
         _ => {
             return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
-                "记录未保存文件路径".to_string(),
+                "Record has no saved file path".to_string(),
             ))
         }
     };
@@ -3849,7 +3848,7 @@ async fn cleanup_download_record_file(
         freed_bytes = meta.len();
         if let Err(e) = tokio::fs::remove_file(&path_buf).await {
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
-                format!("删除安装包失败: {}", e),
+                format!("Failed to delete installation package: {}", e),
             ));
         }
         file_deleted = true;
@@ -3876,7 +3875,7 @@ async fn cleanup_download_record_file(
 
     if let Err(e) = data.db.lock().unwrap().delete_download_record(id) {
         return HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("删除记录失败: {}", e)));
+            .json(ApiResponse::<String>::error(format!("Failed to delete record: {}", e)));
     }
 
     HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
@@ -3888,7 +3887,7 @@ async fn cleanup_download_record_file(
     })))
 }
 
-// 清理服务器上的下载文件
+// Clean up download files on the server
 async fn cleanup_downloads(data: web::Data<AppState>) -> impl Responder {
     let jobs_dir = data.downloads_dir.join("jobs");
     let mut cleaned = 0i64;
@@ -3923,7 +3922,7 @@ async fn cleanup_downloads(data: web::Data<AppState>) -> impl Responder {
     })))
 }
 
-// ============ 订阅相关端点 ============
+// ============ Subscription endpoints ============
 
 #[derive(Deserialize)]
 struct SubscriptionRequest {
@@ -3936,16 +3935,16 @@ struct SubscriptionRequest {
     artist_name: Option<String>,
 }
 
-// 获取所有订阅
+// Get all subscriptions
 async fn get_subscriptions(data: web::Data<AppState>) -> impl Responder {
     match data.db.lock().unwrap().get_all_subscriptions() {
         Ok(subs) => HttpResponse::Ok().json(ApiResponse::success(subs)),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("获取订阅失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to get subscriptions: {}", e))),
     }
 }
 
-// 添加订阅
+// Add subscription
 async fn add_subscription(
     req: web::Json<SubscriptionRequest>,
     data: web::Data<AppState>,
@@ -3961,13 +3960,13 @@ async fn add_subscription(
     };
 
     match data.db.lock().unwrap().add_subscription(&subscription) {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已添加".to_string())),
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("Subscription added".to_string())),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("添加订阅失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to add subscription: {}", e))),
     }
 }
 
-// 移除订阅
+// Remove subscription
 async fn remove_subscription(
     query: web::Query<SubscriptionRequest>,
     data: web::Data<AppState>,
@@ -3978,13 +3977,13 @@ async fn remove_subscription(
         .unwrap()
         .remove_subscription(&query.app_id, &query.account_email)
     {
-        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("订阅已移除".to_string())),
+        Ok(_) => HttpResponse::Ok().json(ApiResponse::success("Subscription removed".to_string())),
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("移除订阅失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to remove subscription: {}", e))),
     }
 }
 
-// 检查更新
+// Check for updates
 async fn check_updates(data: web::Data<AppState>) -> impl Responder {
     match data.download_manager.check_app_updates().await {
         Ok(updates) => {
@@ -3995,7 +3994,7 @@ async fn check_updates(data: web::Data<AppState>) -> impl Responder {
             })))
         }
         Err(e) => HttpResponse::InternalServerError()
-            .json(ApiResponse::<String>::error(format!("检查更新失败: {}", e))),
+            .json(ApiResponse::<String>::error(format!("Failed to check for updates: {}", e))),
     }
 }
 
@@ -4003,7 +4002,7 @@ async fn check_updates(data: web::Data<AppState>) -> impl Responder {
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    // 初始化数据库
+    // Initialize database
     let project_root = resolve_project_root();
     let data_dir = project_root.join("data");
     let downloads_dir = project_root.join("downloads");
@@ -4016,10 +4015,10 @@ async fn main() -> std::io::Result<()> {
         panic!("Database initialization failed: {}", e);
     });
 
-    // 将数据库包装在 Arc<Mutex<Database>> 中
+    // Wrap database in Arc<Mutex<Database>>
     let db_arc = Arc::new(Mutex::new(db));
 
-    // 初始化下载管理器
+    // Initialize download manager
     let download_manager = Arc::new(DownloadManager::new(
         Arc::clone(&db_arc),
         downloads_dir.clone(),
@@ -4042,7 +4041,7 @@ async fn main() -> std::io::Result<()> {
             .route("/i/{token}.plist", web::get().to(plist_from_token))
             .service(
                 web::scope("/api")
-                    // 公开路由：管理员认证
+                    // Public routes: admin authentication
                     .service(
                         web::scope("/auth")
                             .route("/login", web::post().to(admin_login))
@@ -4050,7 +4049,7 @@ async fn main() -> std::io::Result<()> {
                             .route("/me", web::get().to(me))
                             .route("/change-password", web::post().to(change_password)),
                     )
-                    // 公开 OTA / 下载路由（iOS 安装器不会携带后台登录 cookie）
+                    // Public OTA / download routes (iOS installer does not send the admin login cookie)
                     .service(
                         web::scope("/public")
                             .route("/download-file", web::get().to(download_file))
@@ -4060,7 +4059,7 @@ async fn main() -> std::io::Result<()> {
                             .route("/download-records/{id}/file", web::delete().to(cleanup_download_record_file))
                             .route("/ipa-files/{id}/download", web::get().to(download_ipa_file)),
                     )
-                    // 需要管理员认证的路由
+                    // Routes requiring admin authentication
                     .service(
                         web::scope("")
                             .wrap(from_fn(require_auth))
@@ -4098,7 +4097,7 @@ async fn main() -> std::io::Result<()> {
                             .route("/check-updates", web::get().to(check_updates)),
                     ),
             )
-            // 托管前端静态文件
+            // Serve frontend static files
             .service(fs::Files::new("/", "./dist").index_file("index.html"))
     })
     .bind(bind_address)?

@@ -29,7 +29,7 @@ impl DownloadManager {
         }
     }
 
-    // 批量下载功能 - 简化版
+    // Batch download feature - simplified version
     pub async fn start_batch_download<S: AppleAuthService + Clone + Send + Sync + 'static>(
         &self,
         task_name: &str,
@@ -42,7 +42,7 @@ impl DownloadManager {
             .unwrap()
             .create_batch_task(task_name, total_count)?;
 
-        // 添加所有项目到数据库
+        // Add all items to the database
         for item in &items {
             self.db.lock().unwrap().add_batch_item(
                 batch_id,
@@ -53,7 +53,7 @@ impl DownloadManager {
             )?;
         }
 
-        // 异步执行批量下载
+        // Execute batch download asynchronously
         let db_clone = Arc::clone(&self.db);
         let downloads_dir = self.downloads_dir.clone();
         tokio::spawn(async move {
@@ -73,7 +73,7 @@ impl DownloadManager {
         let mut failed_count = 0i64;
 
         for (index, item) in items.iter().enumerate() {
-            // 获取数据库中的项目ID
+            // Get item IDs from the database
             let batch_items = db
                 .lock()
                 .unwrap()
@@ -133,7 +133,7 @@ impl DownloadManager {
             }
         }
 
-        // 标记批量任务完成
+        // Mark batch task as complete
         let _ = db.lock().unwrap().update_batch_task_progress(
             batch_id,
             completed_count,
@@ -142,7 +142,7 @@ impl DownloadManager {
         );
     }
 
-    // 带重试的下载
+    // Download with retry
     async fn download_with_retry<S: AppleAuthService + Clone + Send + Sync>(
         db: &Arc<Mutex<Database>>,
         downloads_dir: &PathBuf,
@@ -169,7 +169,7 @@ impl DownloadManager {
             .await
             {
                 Ok(result) => {
-                    // 记录成功下载
+                    // Record successful download
                     if let Some(ref file_path) = result.file {
                         let file_meta = std::fs::metadata(&file_path).ok();
                         let metadata = result.metadata;
@@ -263,7 +263,7 @@ impl DownloadManager {
                         return Err(e);
                     }
 
-                    // 指数退避
+                    // Exponential backoff
                     let delay = Duration::from_millis(3000 * (2_u64.pow(retry_count as u32)));
                     tokio::time::sleep(delay).await;
                 }
@@ -271,7 +271,7 @@ impl DownloadManager {
         }
     }
 
-    // 断点续传下载
+    // Resumable download
     async fn download_with_resume<S: AppleAuthService + Clone>(
         downloads_dir: &PathBuf,
         store: &S,
@@ -295,7 +295,7 @@ impl DownloadManager {
         download_ipa_with_account(params).await
     }
 
-    // 检查应用更新
+    // Check for app updates
     pub async fn check_app_updates(
         &self,
     ) -> Result<Vec<AppUpdate>, Box<dyn std::error::Error + Send + Sync>> {
@@ -303,7 +303,7 @@ impl DownloadManager {
         let mut updates = Vec::new();
 
         for sub in subscriptions {
-            // 查询最新版本
+            // Query latest version
             let versions = self
                 .fetch_versions(&sub.app_id, sub.account_region.as_deref())
                 .await?;
@@ -316,7 +316,7 @@ impl DownloadManager {
                     .unwrap_or("");
 
                 if latest_version_str != current_version {
-                    // 有更新
+                    // Update available
                     let update = AppUpdate {
                         app_id: sub.app_id.clone(),
                         app_name: sub.app_name.clone(),
@@ -329,7 +329,7 @@ impl DownloadManager {
                     };
                     updates.push(update);
 
-                    // 更新数据库中的版本
+                    // Update version in database
                     let _ = self.db.lock().unwrap().update_subscription_version(
                         &sub.app_id,
                         &sub.account_email,
@@ -337,7 +337,7 @@ impl DownloadManager {
                     );
                 }
 
-                // 更新最后检查时间
+                // Update last check time
                 let _ = self.db.lock().unwrap().update_subscription_version(
                     &sub.app_id,
                     &sub.account_email,
@@ -356,7 +356,7 @@ impl DownloadManager {
     ) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
         let region = region.unwrap_or("US");
 
-        // 尝试第一个 API
+        // Try first API
         let url1 = format!(
             "https://api.timbrd.com/apple/app-version/index.php?id={}&country={}",
             app_id, region
@@ -383,7 +383,7 @@ impl DownloadManager {
         let final_versions = if let Some(vers) = versions {
             vers
         } else {
-            // 尝试第二个 API
+            // Try second API
             let url2 = format!(
                 "https://apis.bilin.eu.org/history/{}?country={}",
                 app_id, region
@@ -408,7 +408,7 @@ impl DownloadManager {
         Ok(final_versions)
     }
 
-    // 计算下载速度
+    // Calculate download speed
     pub fn calculate_speed(&self, downloaded: u64, elapsed: Duration) -> f64 {
         if elapsed.as_secs() == 0 {
             return 0.0;

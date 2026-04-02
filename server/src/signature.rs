@@ -247,7 +247,7 @@ fn build_injection_plan(
         return Ok(SignatureApplyResult {
             applied_paths: Vec::new(),
             replacements: Vec::new(),
-            warning: Some("包内未声明需要补齐的 .sinf 目标".to_string()),
+            warning: Some("No .sinf targets declared in package".to_string()),
         });
     }
 
@@ -256,7 +256,7 @@ fn build_injection_plan(
             applied_paths: Vec::new(),
             replacements: Vec::new(),
             warning: Some(format!(
-                "包内声明了 {} 个 .sinf 目标，但 Apple 下载响应未返回任何真实 sinf",
+                "Package declares {} .sinf target(s), but Apple download response returned no real sinf",
                 target_paths.len()
             )),
         });
@@ -302,7 +302,7 @@ fn build_injection_plan(
                 return Ok(SignatureApplyResult {
                     applied_paths: Vec::new(),
                     replacements: Vec::new(),
-                    warning: Some("存在无法解析 basename 的主 .sinf 路径，跳过注入".to_string()),
+                    warning: Some("Primary .sinf path has unparseable basename, skipping injection".to_string()),
                 });
             };
             if primary_name_to_index.insert(base, index).is_some() {
@@ -310,7 +310,7 @@ fn build_injection_plan(
                     applied_paths: Vec::new(),
                     replacements: Vec::new(),
                     warning: Some(
-                        "主 SinfPaths 出现重复 basename，无法安全映射 replication 目标".to_string(),
+                        "Duplicate basename in primary SinfPaths, cannot safely map replication targets".to_string(),
                     ),
                 });
             }
@@ -332,7 +332,7 @@ fn build_injection_plan(
                     applied_paths: Vec::new(),
                     replacements: Vec::new(),
                     warning: Some(format!(
-                        "replication 目标 {} 无法解析 basename，跳过注入",
+                        "Replication target {} has unparseable basename, skipping injection",
                         path
                     )),
                 });
@@ -342,7 +342,7 @@ fn build_injection_plan(
                     applied_paths: Vec::new(),
                     replacements: Vec::new(),
                     warning: Some(format!(
-                        "replication 目标 {} 找不到同 basename 的主 SinfPath，跳过注入",
+                        "Replication target {} has no matching primary SinfPath with same basename, skipping injection",
                         path
                     )),
                 });
@@ -365,7 +365,7 @@ fn build_injection_plan(
         applied_paths: Vec::new(),
         replacements: Vec::new(),
         warning: Some(format!(
-            "Apple 返回 sinf 数量 ({}) 与包内声明目标数量 ({}) 不匹配，跳过注入",
+            "Apple returned {} sinf(s) but package declares {} target(s), counts differ — skipping injection",
             signatures.len(),
             target_paths.len()
         )),
@@ -602,7 +602,7 @@ pub fn inspect_ipa_path(
     // Missing sinf files that the manifest declares → always a blocker.
     if !missing_sinf_paths.is_empty() {
         blockers.push(format!(
-            "包内声明了 {} 个 .sinf 目标，但缺少 {} 个：{}",
+            "Package declares {} .sinf target(s) but {} are missing: {}",
             declared_sinf_paths.len(),
             missing_sinf_paths.len(),
             missing_sinf_paths.join(", ")
@@ -625,35 +625,35 @@ pub fn inspect_ipa_path(
         // Developer-signed / sideloaded IPA with provisioning profile.
         if !encrypted_binaries.is_empty() {
             blockers.push(format!(
-                "检测到 {} 个 FairPlay 加密二进制，这类包通常不是可直接侧载的成品 IPA",
+                "Detected {} FairPlay-encrypted binary/binaries; this package is usually not a directly sideloadable IPA",
                 encrypted_binaries.len()
             ));
         }
     } else if !encrypted_binaries.is_empty() {
         // Encrypted binaries with no sinfs and no provisioning profile → unrunnable.
         blockers.push(format!(
-            "检测到 {} 个 FairPlay 加密二进制，且未发现 embedded.mobileprovision，这类包不能直接侧载，继续安装大概率黑屏或闪退",
+            "Detected {} FairPlay-encrypted binary/binaries with no embedded.mobileprovision; this package cannot be sideloaded directly and will likely show a black screen or crash",
             encrypted_binaries.len()
         ));
     } else {
         // No encryption, no provisioning profile, no SC_Info → likely broken.
         blockers.push(
-            "包内未发现 embedded.mobileprovision，当前看起来不像已正确重签的可侧载 IPA".to_string(),
+            "No embedded.mobileprovision found; this does not appear to be a correctly re-signed sideloadable IPA".to_string(),
         );
     }
 
     let direct_install_ok = blockers.is_empty();
     let blocked_reason = (!blockers.is_empty()).then(|| blockers.join("；"));
     let recommended_action = blocked_reason.as_ref().map(|reason| {
-        if reason.contains("缺少") {
-            "请确认 Apple 下载响应是否返回了完整的 sinf 数据".to_string()
+        if reason.contains("missing") {
+            "Please verify that the Apple download response returned complete sinf data".to_string()
         } else {
-            "请先获取完整解密并正确重签（含全部 .appex）的 IPA，再重新上传或安装".to_string()
+            "Please obtain a fully decrypted and correctly re-signed IPA (including all .appex bundles) before uploading or installing".to_string()
         }
     });
     let summary = if sinf_fully_injected && !encrypted_binaries.is_empty() {
         format!(
-            "App Store 签名包：已注入 {} 个 .sinf（含 {} 个加密二进制），iOS 运行时负责 FairPlay 解密",
+            "App Store signed package: injected {} .sinf(s) (with {} encrypted binary/binaries); iOS runtime handles FairPlay decryption",
             present_sinf_paths.len(),
             encrypted_binaries.len()
         )
@@ -661,8 +661,8 @@ pub fn inspect_ipa_path(
         match (&blocked_reason, &recommended_action) {
             (Some(reason), Some(action)) => format!("{}。{}。", reason, action),
             (Some(reason), None) => reason.clone(),
-            _ if has_sc_info_manifest => "未检测到缺失的 .sinf 目标，可继续安装验证".to_string(),
-            _ => "未发现明显的 FairPlay / 签名阻塞，可继续安装验证".to_string(),
+            _ if has_sc_info_manifest => "No missing .sinf targets detected; installation verification can proceed".to_string(),
+            _ => "No obvious FairPlay or signing blockers found; installation verification can proceed".to_string(),
         }
     };
 
@@ -949,7 +949,7 @@ impl SignatureClient {
                     applied_paths: Vec::new(),
                     replacements: Vec::new(),
                     warning: Some(
-                        "包内无 Manifest，且 Apple 下载响应未返回任何真实 sinf".to_string(),
+                        "Package has no Manifest and Apple download response returned no real sinf".to_string(),
                     ),
                 }
             } else {
@@ -961,7 +961,7 @@ impl SignatureClient {
                         signature_index: 0,
                     }],
                     warning: Some(
-                        "包内未找到 SC_Info/Manifest.plist，已按主 app 可执行文件回退注入首个 sinf"
+                        "SC_Info/Manifest.plist not found; falling back to injecting first sinf using the main app executable"
                             .to_string(),
                     ),
                 }
@@ -970,7 +970,7 @@ impl SignatureClient {
             SignatureApplyResult {
                 applied_paths: Vec::new(),
                 replacements: Vec::new(),
-                warning: Some("包内未找到 SC_Info/Manifest.plist，且无法从 Info.plist 推断 sinf 路径，跳过注入".to_string()),
+                warning: Some("SC_Info/Manifest.plist not found and sinf path cannot be inferred from Info.plist; skipping injection".to_string()),
             }
         };
 
@@ -1104,7 +1104,7 @@ mod tests {
         assert!(plan
             .warning
             .unwrap_or_default()
-            .contains("找不到同 basename 的主 SinfPath"));
+            .contains("no matching primary SinfPath"));
     }
 
     #[test]
@@ -1139,7 +1139,7 @@ mod tests {
         assert!(result
             .warning
             .unwrap_or_default()
-            .contains("回退注入首个 sinf"));
+            .contains("falling back to injecting first sinf"));
 
         let mut zip = ZipArchive::new(Cursor::new(client.archive)).unwrap();
         let mut entry = zip

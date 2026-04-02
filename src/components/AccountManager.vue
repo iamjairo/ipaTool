@@ -140,6 +140,28 @@
           </div>
 
           <div class="form-field">
+            <label class="field-label">App Store Region</label>
+            <el-select
+              v-model="newAccount.region"
+              :disabled="logging"
+              size="large"
+              filterable
+              placeholder="Select your account's App Store region"
+              class="form-input w-full"
+            >
+              <el-option
+                v-for="r in REGION_OPTIONS"
+                :key="r.value"
+                :label="r.label"
+                :value="r.value"
+              />
+            </el-select>
+            <p class="field-hint">
+              Select the App Store region this Apple ID belongs to. This ensures searches and downloads use the correct storefront.
+            </p>
+          </div>
+
+          <div class="form-field">
             <label class="field-label">Verification Code</label>
             <el-input
               v-model="newAccount.code"
@@ -265,6 +287,7 @@ const newAccount = ref({
 	email: '',
 	password: '',
 	code: '',
+	region: 'US',
 })
 const logging = ref(false)
 const autoLogging = ref(false)
@@ -382,6 +405,7 @@ const loginAccount = async () => {
 				password: newAccount.value.password,
 				mfa: newAccount.value.code || undefined,
 				saveCredentials: savePassword.value,
+				region: newAccount.value.region || 'US',
 			}),
 		})
 
@@ -445,7 +469,7 @@ const loginAccount = async () => {
 		saveAccounts()
 
 		// Reset form
-		newAccount.value = { email: '', password: '', code: '' }
+		newAccount.value = { email: '', password: '', code: '', region: 'US' }
 
 		ElMessage.success(`Signed in successfully: ${data.data.email}`)
 	} catch (error) {
@@ -612,19 +636,104 @@ onMounted(async () => {
 	emit('accounts-updated', accounts.value)
 })
 
-// Get region label
+// Comprehensive App Store region map
+const REGION_MAP = {
+	US: '🇺🇸 United States',
+	GB: '🇬🇧 United Kingdom',
+	CA: '🇨🇦 Canada',
+	AU: '🇦🇺 Australia',
+	NZ: '🇳🇿 New Zealand',
+	DE: '🇩🇪 Germany',
+	FR: '🇫🇷 France',
+	NL: '🇳🇱 Netherlands',
+	BE: '🇧🇪 Belgium',
+	AT: '🇦🇹 Austria',
+	CH: '🇨🇭 Switzerland',
+	ES: '🇪🇸 Spain',
+	IT: '🇮🇹 Italy',
+	PT: '🇵🇹 Portugal',
+	SE: '🇸🇪 Sweden',
+	NO: '🇳🇴 Norway',
+	DK: '🇩🇰 Denmark',
+	FI: '🇫🇮 Finland',
+	PL: '🇵🇱 Poland',
+	CZ: '🇨🇿 Czech Republic',
+	HU: '🇭🇺 Hungary',
+	RO: '🇷🇴 Romania',
+	GR: '🇬🇷 Greece',
+	TR: '🇹🇷 Turkey',
+	RU: '🇷🇺 Russia',
+	UA: '🇺🇦 Ukraine',
+	IE: '🇮🇪 Ireland',
+	SK: '🇸🇰 Slovakia',
+	HR: '🇭🇷 Croatia',
+	BG: '🇧🇬 Bulgaria',
+	LT: '🇱🇹 Lithuania',
+	LV: '🇱🇻 Latvia',
+	EE: '🇪🇪 Estonia',
+	SI: '🇸🇮 Slovenia',
+	LU: '🇱🇺 Luxembourg',
+	MT: '🇲🇹 Malta',
+	CY: '🇨🇾 Cyprus',
+	IS: '🇮🇸 Iceland',
+	CN: '🇨🇳 China',
+	JP: '🇯🇵 Japan',
+	KR: '🇰🇷 South Korea',
+	HK: '🇭🇰 Hong Kong',
+	TW: '🇹🇼 Taiwan',
+	SG: '🇸🇬 Singapore',
+	MY: '🇲🇾 Malaysia',
+	TH: '��🇭 Thailand',
+	ID: '🇮🇩 Indonesia',
+	PH: '🇵🇭 Philippines',
+	VN: '🇻🇳 Vietnam',
+	IN: '🇮🇳 India',
+	PK: '🇵🇰 Pakistan',
+	BD: '🇧🇩 Bangladesh',
+	LK: '🇱🇰 Sri Lanka',
+	BR: '🇧🇷 Brazil',
+	MX: '🇲🇽 Mexico',
+	AR: '🇦🇷 Argentina',
+	CL: '🇨🇱 Chile',
+	CO: '🇨🇴 Colombia',
+	PE: '🇵🇪 Peru',
+	VE: '🇻🇪 Venezuela',
+	EC: '🇪🇨 Ecuador',
+	BO: '🇧🇴 Bolivia',
+	UY: '🇺🇾 Uruguay',
+	PY: '🇵🇾 Paraguay',
+	SA: '🇸🇦 Saudi Arabia',
+	AE: '🇦🇪 United Arab Emirates',
+	IL: '🇮🇱 Israel',
+	EG: '🇪🇬 Egypt',
+	ZA: '🇿🇦 South Africa',
+	NG: '🇳🇬 Nigeria',
+	KE: '🇰🇪 Kenya',
+	GH: '🇬🇭 Ghana',
+	ET: '🇪🇹 Ethiopia',
+	JO: '🇯🇴 Jordan',
+	KW: '🇰🇼 Kuwait',
+	QA: '🇶🇦 Qatar',
+	BH: '🇧🇭 Bahrain',
+	OM: '🇴🇲 Oman',
+	LB: '🇱🇧 Lebanon',
+}
+
+// Sorted region options for the dropdown
+const REGION_OPTIONS = Object.entries(REGION_MAP)
+	.map(([value, label]) => ({ value, label: `${label} (${value})` }))
+	.sort((a, b) => {
+		// Pin US to top, then sort alphabetically
+		if (a.value === 'US') return -1
+		if (b.value === 'US') return 1
+		return a.label.localeCompare(b.label)
+	})
+
+// Get display label for a region code
 const getRegionLabel = (region) => {
-	const regionMap = {
-		US: '🇺🇸 US',
-		CN: '🇨🇳 CN',
-		JP: '🇯🇵 JP',
-		GB: '🇬🇧 GB',
-		DE: '🇩🇪 DE',
-		FR: '🇫🇷 FR',
-		CA: '🇨🇦 CA',
-		AU: '🇦🇺 AU',
-	}
-	return regionMap[region] || region
+	if (!region) return '🇺🇸 US'
+	const code = region.toUpperCase()
+	return REGION_MAP[code] ? `${REGION_MAP[code].split(' ').slice(1).join(' ')} (${code})` : code
 }
 
 // Expose account list for other components
@@ -778,6 +887,17 @@ defineExpose({
 .field-icon {
 	color: #9ca3af;
 	font-size: 16px;
+}
+
+.field-hint {
+	font-size: 11px;
+	color: #6b7280;
+	margin: 0;
+	line-height: 1.4;
+}
+
+.dark .field-hint {
+	color: #9ca3af;
 }
 
 .submit-button {
@@ -1000,11 +1120,44 @@ defineExpose({
 	border-color: rgba(16, 185, 129, 0.4);
 }
 
+/* Named European/other regions */
 .region-gb,
 .region-de,
 .region-fr,
 .region-ca,
-.region-au {
+.region-au,
+.region-nl,
+.region-be,
+.region-at,
+.region-ch,
+.region-se,
+.region-no,
+.region-dk,
+.region-fi,
+.region-ie,
+.region-nz,
+.region-es,
+.region-it,
+.region-pt,
+.region-pl,
+.region-cz,
+.region-hu,
+.region-ro,
+.region-gr,
+.region-tr,
+.region-ru,
+.region-ua,
+.region-sk,
+.region-hr,
+.region-bg,
+.region-lt,
+.region-lv,
+.region-ee,
+.region-si,
+.region-lu,
+.region-mt,
+.region-cy,
+.region-is {
 	background: linear-gradient(
 		135deg,
 		rgba(139, 92, 246, 0.15) 0%,
@@ -1018,7 +1171,39 @@ defineExpose({
 .dark .region-de,
 .dark .region-fr,
 .dark .region-ca,
-.dark .region-au {
+.dark .region-au,
+.dark .region-nl,
+.dark .region-be,
+.dark .region-at,
+.dark .region-ch,
+.dark .region-se,
+.dark .region-no,
+.dark .region-dk,
+.dark .region-fi,
+.dark .region-ie,
+.dark .region-nz,
+.dark .region-es,
+.dark .region-it,
+.dark .region-pt,
+.dark .region-pl,
+.dark .region-cz,
+.dark .region-hu,
+.dark .region-ro,
+.dark .region-gr,
+.dark .region-tr,
+.dark .region-ru,
+.dark .region-ua,
+.dark .region-sk,
+.dark .region-hr,
+.dark .region-bg,
+.dark .region-lt,
+.dark .region-lv,
+.dark .region-ee,
+.dark .region-si,
+.dark .region-lu,
+.dark .region-mt,
+.dark .region-cy,
+.dark .region-is {
 	background: linear-gradient(
 		135deg,
 		rgba(139, 92, 246, 0.25) 0%,

@@ -56,3 +56,6 @@ coverage/
 # Local runtime state
 downloads/
 server/*.db
+
+# Tauri
+src-tauri/target/
