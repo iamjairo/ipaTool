@@ -13,9 +13,9 @@ services:
       - PORT=8080
       - DATABASE_PATH=/app/data/ipa-webtool.db
     volumes:
-      # 持久化数据目录
+      # Persistent data directory
       - ipa-data:/app/data
-      # 下载的 IPA 文件
+      # Downloaded IPA files
       - ipa-downloads:/app/downloads
     restart: unless-stopped
     healthcheck:

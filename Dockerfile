@@ -1,37 +1,34 @@
-# 多阶段构建 Dockerfile（完全修复版）
-# 前端构建阶段
+# Multi-stage Dockerfile
+# ── Stage 1: Frontend ─────────────────────────────────────────────────────────
 FROM node:18-alpine AS frontend-builder
 
-# 安装 pnpm
-RUN npm install -g pnpm@9
+# Install pnpm (version must match the lockfile)
+RUN npm install -g pnpm@10
 
-# 设置工作目录
+# Set working directory
 WORKDIR /app
 
-# 复制依赖文件
+# Copy dependency manifests
 COPY package.json pnpm-lock.yaml ./
 
-# 安装依赖（使用缓存挂载）
+# Install dependencies (with BuildKit cache mount)
 RUN --mount=type=cache,target=/root/.pnpm-store,id=pnpm_cache \
     pnpm install --frozen-lockfile
 
-# 复制所有源文件
+# Copy all source files
 COPY . .
 
-# 构建前端（显示详细输出）
+# Build the frontend
 RUN pnpm run build && \
     ls -la dist/ && \
     echo "Frontend build completed successfully"
 
-# Rust 后端构建阶段
+# ── Stage 2: Rust backend ─────────────────────────────────────────────────────
 FROM rust:1.84-slim AS backend-builder
-
-# rust:1.84-slim 镜像中 Cargo 已经在 /usr/local/cargo/bin
-# 不需要设置额外的环境变量
 
 WORKDIR /app
 
-# 安装构建依赖
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
@@ -42,74 +39,68 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# 验证 Rust 工具链
+# Verify toolchain
 RUN rustc --version && cargo --version
 
-# 复制 Cargo 配置文件
+# Copy Cargo manifests
 COPY server/Cargo.toml server/Cargo.lock ./
 
-# 创建占位符源文件用于预构建依赖
+# Pre-build dependencies using placeholder source files
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
     echo "#![allow(dead_code)]" > src/lib.rs
 
-# 预构建依赖（使用 BuildKit 缓存）
 RUN --mount=type=cache,target=/app/target,id=cargo_cache,sharing=locked \
     cargo build --release && \
-    echo "Dependency build completed successfully"
+    echo "Dependency pre-build completed"
 
-# 删除占位符源文件
+# Remove placeholder source files
 RUN rm -rf src
 
-# 复制实际源代码
+# Copy actual source code
 COPY server/src ./src
 
-# 构建应用（使用缓存）- 只构建 release 版本
+# Build the final binary
 RUN --mount=type=cache,target=/app/target,id=cargo_cache,sharing=locked \
     cargo build --release && \
     ls -lh target/release/server && \
     echo "Backend build completed successfully"
 
-# 将构建产物从缓存目录复制到镜像层（确保 COPY --from=backend-builder 可以访问）
+# Copy binary out of the cache mount so it is accessible in the next stage
 RUN --mount=type=cache,target=/app/target,id=cargo_cache,sharing=locked \
     cp target/release/server /app/server && \
     ls -lh /app/server && \
     echo "Binary copied successfully"
 
-# 生产环境镜像
+# ── Stage 3: Production image ─────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-# 安装运行时依赖
+# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     sqlite3 \
     && rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
 WORKDIR /app
 
-# 从 frontend-builder 阶段复制构建好的前端文件
+# Copy built frontend from Stage 1
 COPY --from=frontend-builder /app/dist ./dist
 
-# 从 backend-builder 阶段复制构建好的后端二进制文件
+# Copy built backend binary from Stage 2
 COPY --from=backend-builder /app/server ./server
 
-# 创建数据目录并设置权限
-RUN mkdir -p /app/data && \
-    chmod 777 /app/data
+# Create data directory
+RUN mkdir -p /app/data && chmod 777 /app/data
 
-# 暴露端口
 EXPOSE 8080
 
-# 设置环境变量
 ENV PORT=8080
 ENV RUST_LOG=info
 ENV DATABASE_PATH=/app/data/ipa-webtool.db
 
-# 健康检查
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# 运行应用
 CMD ["./server"]
+
