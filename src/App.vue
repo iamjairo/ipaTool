@@ -118,32 +118,6 @@
         />
       </main>
 
-      <footer class="mt-12 py-6 border-t border-gray-200 dark:border-gray-700">
-        <div class="container mx-auto px-4 text-center">
-          <p class="text-xs text-gray-500 dark:text-gray-500">
-            Made with ❤️ by <a
-              href="https://github.com/ruanrrn"
-              class="text-primary-600 hover:underline font-medium"
-              target="_blank"
-            >ruanrrn</a>
-            &nbsp;·&nbsp;
-            <a
-              href="https://github.com/ruanrrn/ipaTool/issues"
-              class="text-primary-600 hover:underline"
-              target="_blank"
-            >反馈</a>
-            &nbsp;·&nbsp;
-            <a
-              href="https://github.com/ruanrrn/ipaTool"
-              class="text-primary-600 hover:underline"
-              target="_blank"
-            >GitHub</a>
-          </p>
-          <p class="mt-2 text-[11px] text-gray-400 dark:text-gray-500 font-mono">
-            版本：v{{ appVersion }} · build {{ buildId }}
-          </p>
-        </div>
-      </footer>
     </template>
   </div>
 </template>
@@ -151,7 +125,6 @@
 <script setup>
 import { onMounted, onUnmounted, watch, ref } from 'vue'
 
-/* global __APP_VERSION__, __APP_BUILD_ID__ */
 import { useDark } from './composables/useDark'
 import { useAppStore } from './stores/app'
 import { useNotifications } from './composables/useNotifications'
@@ -165,8 +138,6 @@ const notifications = useNotifications()
 
 const authState = ref('loading')
 const API_BASE = '/api'
-const appVersion = __APP_VERSION__
-const buildId = __APP_BUILD_ID__
 
 async function checkAuth() {
   try {

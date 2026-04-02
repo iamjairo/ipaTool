@@ -1,4 +1,5 @@
 use actix_files as fs;
+use actix_multipart::Multipart;
 use actix_web::{
     body::{EitherBody, MessageBody},
     cookie::{time::Duration as CookieDuration, Cookie, SameSite},
@@ -8,19 +9,20 @@ use actix_web::{
     middleware::{from_fn, Next},
     web, App, Error, FromRequest, HttpRequest, HttpResponse, HttpServer, Responder,
 };
+use base64::Engine as _;
 use bytes::Bytes;
 use chrono::{Duration, Utc};
 use futures_util::{
     future::{ready, Ready},
-    stream, StreamExt,
-};
-use ipa_webtool_services::{
-    download_ipa_with_account, generate_mobileconfig, generate_plist, get_license_error_message,
-    AccountStore, AdminUser, BatchItem, Database, DownloadManager, DownloadParams, InstallQuery,
-    JobEndEvent, JobEvent, JobLogEvent, JobProgressEvent, JobProgressPayload, JobState, JobStore,
-    NewSubscription,
+    stream, StreamExt, TryStreamExt,
 };
 use ipa_webtool_services::DownloadRecord;
+use ipa_webtool_services::{
+    canonical_ipa_filename, download_ipa_with_account, generate_plist, get_license_error_message,
+    inspect_ipa_path, AccountStore, AdminUser, BatchItem, Database, DownloadManager,
+    DownloadParams, InstallQuery, IpaInspection, JobEndEvent, JobEvent, JobLogEvent,
+    JobProgressEvent, JobProgressPayload, JobState, JobStore, NewSubscription,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,6 +30,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -78,6 +81,22 @@ struct DownloadUrlQuery {
 }
 
 #[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct PurchaseStatusQuery {
+    token: String,
+    appid: String,
+    appVerId: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[allow(non_snake_case)]
+struct ClaimRequest {
+    token: String,
+    appid: String,
+    appVerId: Option<String>,
+}
+
+#[derive(Deserialize)]
 #[allow(dead_code)]
 #[allow(non_snake_case)]
 struct DownloadRequest {
@@ -103,6 +122,12 @@ struct StartDownloadDirectRequest {
     artistName: Option<String>,
     #[serde(default)]
     autoPurchase: bool,
+}
+
+#[derive(Deserialize)]
+struct AppMetaQuery {
+    appid: String,
+    region: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -204,8 +229,12 @@ struct DownloadRecordView {
     artist_name: Option<String>,
     progress: Option<i64>,
     error: Option<String>,
+    package_kind: String,
+    ota_installable: bool,
+    install_method: String,
     created_at: Option<String>,
     file_exists: bool,
+    inspection: Option<IpaInspection>,
 }
 
 #[derive(Serialize)]
@@ -227,6 +256,10 @@ struct IpaArtifactView {
     record_id: Option<i64>,
     download_url: String,
     install_url: Option<String>,
+    package_kind: String,
+    ota_installable: bool,
+    install_method: String,
+    inspection: Option<IpaInspection>,
 }
 
 #[derive(Clone)]
@@ -252,6 +285,24 @@ fn hash_password(password: &str) -> String {
 fn normalize_mfa_code(mfa: Option<&str>) -> Option<String> {
     mfa.map(|code| code.trim().replace(' ', ""))
         .filter(|code| !code.is_empty())
+}
+
+fn normalize_region_code(region: &str) -> Option<String> {
+    let normalized = region.trim().to_uppercase();
+    if normalized.len() >= 2 && normalized.len() <= 3 {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn resolved_account_region(result: &HashMap<String, Value>, fallback: Option<String>) -> String {
+    result
+        .get("region")
+        .and_then(|value| value.as_str())
+        .and_then(normalize_region_code)
+        .or_else(|| fallback.and_then(|value| normalize_region_code(&value)))
+        .unwrap_or_else(|| "US".to_string())
 }
 
 fn is_pending_mfa_expired(created_at: chrono::DateTime<Utc>) -> bool {
@@ -403,13 +454,10 @@ fn unauthorized_response() -> HttpResponse {
 fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<AuthenticatedAdmin, String> {
     log::debug!("[auth:resolve] token={}..", &token[..8.min(token.len())]);
 
-    let db = app_state
-        .db
-        .lock()
-        .map_err(|e| {
-            log::error!("[auth:resolve] db lock failed: {:?}", e);
-            "认证服务暂时不可用".to_string()
-        })?;
+    let db = app_state.db.lock().map_err(|e| {
+        log::error!("[auth:resolve] db lock failed: {:?}", e);
+        "认证服务暂时不可用".to_string()
+    })?;
 
     let session = db
         .get_session(token)
@@ -418,19 +466,29 @@ fn resolve_admin_session(app_state: &AppState, token: &str) -> Result<Authentica
             format!("查询登录态失败: {}", e)
         })?
         .ok_or_else(|| {
-            log::debug!("[auth:resolve] no valid session for token={}..", &token[..8.min(token.len())]);
+            log::debug!(
+                "[auth:resolve] no valid session for token={}..",
+                &token[..8.min(token.len())]
+            );
             "未登录或登录已过期".to_string()
         })?;
 
     let user = db
         .get_admin_user(&session.username)
         .map_err(|e| {
-            log::error!("[auth:resolve] get_admin_user failed for {}: {}", session.username, e);
+            log::error!(
+                "[auth:resolve] get_admin_user failed for {}: {}",
+                session.username,
+                e
+            );
             format!("查询管理员失败: {}", e)
         })?
         .ok_or_else(|| {
             let _ = db.delete_session(token);
-            log::warn!("[auth:resolve] admin user not found: {}, session deleted", session.username);
+            log::warn!(
+                "[auth:resolve] admin user not found: {}, session deleted",
+                session.username
+            );
             "管理员账号不存在".to_string()
         })?;
 
@@ -519,10 +577,18 @@ async fn get_versions(query: web::Query<VersionQuery>) -> impl Responder {
 
     let response1 = client.get(&url1).send().await;
     let versions = if let Ok(resp) = response1 {
-        resp.json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|json| json.get("data").and_then(|d| d.as_array()).cloned())
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            // Handle both {data: [...]} and direct [...] formats
+            if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                Some(data.clone())
+            } else if json.is_array() {
+                Some(json.as_array().cloned().unwrap_or_default())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -589,6 +655,13 @@ async fn get_versions(query: web::Query<VersionQuery>) -> impl Responder {
 }
 
 fn build_base_url(req: &HttpRequest) -> String {
+    if let Ok(public_base_url) = std::env::var("IPA_TOOL_PUBLIC_BASE_URL") {
+        let trimmed = public_base_url.trim().trim_end_matches('/');
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
     let info = req.connection_info();
     format!("{}://{}", info.scheme(), info.host())
 }
@@ -639,45 +712,256 @@ fn resolve_project_root() -> PathBuf {
 
 fn artifact_id_from_path(path: &Path, downloads_dir: &Path) -> Option<String> {
     let relative = path.strip_prefix(downloads_dir).ok()?;
-    Some(relative.to_string_lossy().replace('\\', "__").replace('/', "__"))
+    Some(
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(relative.to_string_lossy().as_bytes()),
+    )
 }
 
 fn resolve_artifact_path(downloads_dir: &Path, artifact_id: &str) -> Option<PathBuf> {
-    let relative = artifact_id.replace("__", "/");
-    let candidate = downloads_dir.join(relative);
-    let canonical = candidate.canonicalize().ok()?;
     let canonical_root = downloads_dir.canonicalize().ok()?;
-    if canonical.starts_with(&canonical_root) {
-        Some(canonical)
-    } else {
-        None
+
+    let try_relative = |relative: &str| -> Option<PathBuf> {
+        let candidate = downloads_dir.join(relative);
+        let canonical = candidate.canonicalize().ok()?;
+        if canonical.starts_with(&canonical_root) {
+            Some(canonical)
+        } else {
+            None
+        }
+    };
+
+    if let Ok(decoded) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(artifact_id) {
+        if let Ok(relative) = String::from_utf8(decoded) {
+            if let Some(path) = try_relative(&relative) {
+                return Some(path);
+            }
+        }
     }
+
+    // 兼容历史 artifact id：旧实现把 `/` 和 `\\` 都替换成 `__`，
+    // 当文件名本身包含 `__` 时不可逆，因此这里通过重扫文件系统按旧规则比对，
+    // 而不是继续使用 `replace("__", "/")` 这种有歧义的反解方式。
+    scan_download_artifacts(downloads_dir)
+        .into_iter()
+        .find(|artifact| {
+            artifact
+                .path
+                .strip_prefix(downloads_dir)
+                .ok()
+                .map(|relative| {
+                    relative
+                        .to_string_lossy()
+                        .replace('\\', "__")
+                        .replace('/', "__")
+                })
+                .as_deref()
+                == Some(artifact_id)
+        })
+        .map(|artifact| artifact.path)
 }
 
 fn build_record_download_url(req: &HttpRequest, record_id: i64) -> String {
-    format!("{}/api/download-records/{}/file", build_base_url(req), record_id)
+    format!(
+        "{}/api/public/download-records/{}/file",
+        build_base_url(req),
+        record_id
+    )
 }
 
-fn build_record_install_url(req: &HttpRequest, record: &DownloadRecord, record_id: i64) -> Option<String> {
+fn inspection_blocks_install(inspection: &IpaInspection) -> bool {
+    !inspection.direct_install_ok
+}
+
+#[derive(Debug, Clone)]
+struct DeliveryDecision {
+    package_kind: String,
+    ota_installable: bool,
+    install_method: String,
+}
+
+fn derive_delivery_decision(
+    inspection: Option<&IpaInspection>,
+    file_exists: bool,
+) -> DeliveryDecision {
+    match inspection {
+        Some(inspection)
+            if inspection.direct_install_ok && inspection.has_embedded_mobileprovision =>
+        {
+            // Developer-signed / sideloaded IPA with provisioning profile
+            DeliveryDecision {
+                package_kind: "ota_sideloadable".to_string(),
+                ota_installable: true,
+                install_method: "ota".to_string(),
+            }
+        }
+        Some(inspection) if inspection.direct_install_ok && inspection.has_sc_info_manifest => {
+            // App Store IPA with all declared sinfs properly injected.
+            // FairPlay encrypted binaries are expected and handled by iOS at runtime.
+            // This matches ipatool.js and ApplePackage (Asspp) behavior.
+            DeliveryDecision {
+                package_kind: "appstore_sinf_package".to_string(),
+                ota_installable: true,
+                install_method: "ota".to_string(),
+            }
+        }
+        Some(inspection)
+            if inspection.has_sc_info_manifest
+                && !inspection.missing_sinf_paths.is_empty() =>
+        {
+            // App Store IPA but sinf injection incomplete — cannot install
+            DeliveryDecision {
+                package_kind: "appstore_incomplete_sinf".to_string(),
+                ota_installable: false,
+                install_method: if file_exists {
+                    "download_only"
+                } else {
+                    "manual_review"
+                }
+                .to_string(),
+            }
+        }
+        Some(inspection) if !inspection.encrypted_binaries.is_empty() => {
+            // Encrypted binaries with no sinfs and no provisioning profile
+            DeliveryDecision {
+                package_kind: "fairplay_encrypted".to_string(),
+                ota_installable: false,
+                install_method: if file_exists {
+                    "download_only"
+                } else {
+                    "manual_review"
+                }
+                .to_string(),
+            }
+        }
+        Some(_) => DeliveryDecision {
+            package_kind: "broken_or_unknown".to_string(),
+            ota_installable: false,
+            install_method: if file_exists {
+                "download_only"
+            } else {
+                "manual_review"
+            }
+            .to_string(),
+        },
+        None => DeliveryDecision {
+            package_kind: if file_exists {
+                "unknown".to_string()
+            } else {
+                "missing_file".to_string()
+            },
+            ota_installable: false,
+            install_method: if file_exists { "manual_review" } else { "none" }.to_string(),
+        },
+    }
+}
+
+fn persisted_inspection(record: &DownloadRecord) -> Option<IpaInspection> {
+    record
+        .inspection_json
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<IpaInspection>(raw).ok())
+}
+
+fn inspection_for_record(record: &DownloadRecord) -> Option<IpaInspection> {
+    // 优先读 DB 持久化结果，避免每次请求都重新 inspect ZIP
+    if let Some(cached) = persisted_inspection(record) {
+        return Some(cached);
+    }
+    // DB 没有，才做文件 inspect（用于 backfill）
+    record
+        .file_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .as_deref()
+        .and_then(inspect_existing_ipa)
+}
+
+fn sync_record_delivery(
+    db: &Database,
+    record: &DownloadRecord,
+    inspection: Option<&IpaInspection>,
+    file_exists: bool,
+) {
+    let Some(record_id) = record.id else {
+        return;
+    };
+
+    let decision = derive_delivery_decision(inspection, file_exists);
+    let inspection_json = inspection.and_then(|value| serde_json::to_string(value).ok());
+
+    let stored_matches = record.package_kind.as_deref() == Some(decision.package_kind.as_str())
+        && record.ota_installable == Some(decision.ota_installable)
+        && record.install_method.as_deref() == Some(decision.install_method.as_str())
+        && match (&record.inspection_json, &inspection_json) {
+            (Some(left), Some(right)) => left == right,
+            (None, None) => true,
+            _ => false,
+        };
+
+    if !stored_matches {
+        let _ = db.update_download_record_delivery(
+            record_id,
+            Some(decision.package_kind.as_str()),
+            Some(decision.ota_installable),
+            Some(decision.install_method.as_str()),
+            inspection_json.as_deref(),
+        );
+    }
+}
+
+fn extract_record_id_from_download_url(download_url: &str) -> Option<i64> {
+    let marker = "/api/public/download-records/";
+    let rest = download_url.split(marker).nth(1)?;
+    let record_id = rest.split('/').next()?;
+    record_id.parse().ok()
+}
+
+fn build_record_install_url(
+    req: &HttpRequest,
+    record: &DownloadRecord,
+    record_id: i64,
+) -> Option<String> {
+    let inspection = inspection_for_record(record);
+    let file_exists = record
+        .file_path
+        .as_ref()
+        .map(PathBuf::from)
+        .map(|path| path.exists())
+        .unwrap_or(false);
+    let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
+    if !decision.ota_installable {
+        return None;
+    }
+
     let download_url = build_record_download_url(req, record_id);
     let bundle_id = record.bundle_id.clone()?;
     let bundle_version = record.version.clone().filter(|value| !value.is_empty())?;
     let title = if record.app_name.is_empty() {
-        record.file_path.as_ref()?.rsplit('/').next()?.trim_end_matches(".ipa").to_string()
+        record
+            .file_path
+            .as_ref()?
+            .rsplit('/')
+            .next()?
+            .trim_end_matches(".ipa")
+            .to_string()
     } else {
         record.app_name.clone()
     };
-    let manifest_url = format!(
-        "{}/api/manifest?url={}&bundle_id={}&bundle_version={}&title={}",
-        build_base_url(req),
-        urlencoding::encode(&download_url),
-        urlencoding::encode(&bundle_id),
-        urlencoding::encode(&bundle_version),
-        urlencoding::encode(&title),
-    );
+
+    // 仿 OpenList：对外暴露 /i/{token}.plist，但额外带上 bundle_version 以保留真实版本信息。
+    let name_full = format!("{}@{}", title, bundle_id);
+    let link_encode = urlencoding::encode(&download_url);
+    let name_encode = urlencoding::encode(&name_full);
+    let version_encode = urlencoding::encode(&bundle_version);
+    let raw = format!("{}/{}/{}", link_encode, name_encode, version_encode);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.as_bytes());
+
+    let manifest_url = format!("{}/i/{}.plist", build_base_url(req), token);
+
     Some(format!(
-        "{}/api/install?manifest={}",
-        build_base_url(req),
+        "itms-services://?action=download-manifest&url={}",
         urlencoding::encode(&manifest_url)
     ))
 }
@@ -733,6 +1017,97 @@ fn scan_download_artifacts(downloads_dir: &Path) -> Vec<DownloadArtifact> {
     artifacts
 }
 
+fn inspect_existing_ipa(path: &Path) -> Option<IpaInspection> {
+    match inspect_ipa_path(path) {
+        Ok(inspection) => Some(inspection),
+        Err(error) => {
+            log::warn!("failed to inspect ipa {}: {}", path.display(), error);
+            None
+        }
+    }
+}
+
+fn normalize_download_record_artifact_paths(db: &Database, downloads_dir: &Path) {
+    let records = db.get_all_download_records().unwrap_or_default();
+    let canonical_root = match downloads_dir.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+
+    for mut record in records {
+        let Some(record_id) = record.id else {
+            continue;
+        };
+        let Some(bundle_id) = record
+            .bundle_id
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        let Some(version) = record
+            .version
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            continue;
+        };
+        let Some(file_path) = record.file_path.clone() else {
+            continue;
+        };
+
+        let current_path = PathBuf::from(&file_path);
+        if !current_path.exists() {
+            continue;
+        }
+        let Ok(canonical_current) = current_path.canonicalize() else {
+            continue;
+        };
+        if !canonical_current.starts_with(&canonical_root) {
+            continue;
+        }
+
+        let current_name = canonical_current
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let expected_name = canonical_ipa_filename(&record.app_name, &version, Some(&bundle_id));
+
+        if current_name == expected_name {
+            continue;
+        }
+
+        let Some(parent_dir) = canonical_current.parent() else {
+            continue;
+        };
+        let target_path = parent_dir.join(&expected_name);
+        let final_path = if target_path.exists() {
+            target_path
+        } else {
+            if let Err(error) = std::fs::rename(&canonical_current, &target_path) {
+                log::warn!(
+                    "failed to rename legacy ipa artifact {} -> {}: {}",
+                    canonical_current.display(),
+                    target_path.display(),
+                    error
+                );
+                continue;
+            }
+            target_path
+        };
+
+        record.file_path = Some(final_path.to_string_lossy().to_string());
+        if let Some(size) = std::fs::metadata(&final_path)
+            .ok()
+            .map(|meta| meta.len() as i64)
+        {
+            record.file_size = Some(size);
+        }
+        let _ = db.update_download_record(record_id, &record);
+    }
+}
+
 fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
     let existing_records = db.get_all_download_records().unwrap_or_default();
     let mut known_paths: HashMap<String, DownloadRecord> = HashMap::new();
@@ -767,6 +1142,10 @@ fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
             artist_name: None,
             progress: Some(100),
             error: None,
+            package_kind: None,
+            ota_installable: None,
+            install_method: None,
+            inspection_json: None,
             created_at: None,
         };
         let _ = db.add_download_record(&inferred);
@@ -775,7 +1154,7 @@ fn sync_download_records_from_filesystem(db: &Database, downloads_dir: &Path) {
 
 fn build_job_manifest_url(req: &HttpRequest, job_id: &str) -> String {
     format!(
-        "{}/api/manifest?jobId={}",
+        "{}/api/public/manifest?jobId={}",
         build_base_url(req),
         urlencoding::encode(job_id)
     )
@@ -784,8 +1163,7 @@ fn build_job_manifest_url(req: &HttpRequest, job_id: &str) -> String {
 fn build_job_install_url(req: &HttpRequest, job_id: &str) -> String {
     let manifest_url = build_job_manifest_url(req, job_id);
     format!(
-        "{}/api/install?manifest={}",
-        build_base_url(req),
+        "itms-services://?action=download-manifest&url={}",
         urlencoding::encode(&manifest_url)
     )
 }
@@ -820,16 +1198,17 @@ fn snapshot_progress_event(snapshot: &JobState) -> JobProgressEvent {
     }
 }
 
-async fn start_download_direct(
-    body: web::Bytes,
-    data: web::Data<AppState>,
-) -> impl Responder {
+async fn start_download_direct(body: web::Bytes, data: web::Data<AppState>) -> impl Responder {
     let req: StartDownloadDirectRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("[start-download-direct] JSON parse error: {}", e);
-            eprintln!("[start-download-direct] raw body: {}", String::from_utf8_lossy(&body));
-            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(format!("请求解析失败: {}", e)));
+            eprintln!(
+                "[start-download-direct] raw body: {}",
+                String::from_utf8_lossy(&body)
+            );
+            return HttpResponse::BadRequest()
+                .json(ApiResponse::<String>::error(format!("请求解析失败: {}", e)));
         }
     };
     let accounts = ACCOUNTS.read().await;
@@ -913,6 +1292,13 @@ async fn start_download_direct(
     let artist_name_hint = req.artistName.clone().filter(|value| !value.is_empty());
     let auto_purchase = req.autoPurchase;
     let account_email = account_store.account_email.clone();
+    let account_region = data
+        .db
+        .lock()
+        .ok()
+        .and_then(|db| db.get_account_by_token(&req.token).ok().flatten())
+        .map(|account| account.region)
+        .filter(|value| !value.is_empty());
     let job_for_task = job.clone();
     let job_id_for_task = job_id.clone();
     let db = data.db.clone();
@@ -972,6 +1358,11 @@ async fn start_download_direct(
                         .and_then(|name| name.to_str())
                         .unwrap_or(&appid)
                         .to_string();
+                    let inspection = inspect_existing_ipa(Path::new(&file_path));
+                    let decision = derive_delivery_decision(inspection.as_ref(), true);
+                    let inspection_json = inspection
+                        .as_ref()
+                        .and_then(|value| serde_json::to_string(value).ok());
                     let meta = result.metadata.clone();
                     let record = DownloadRecord {
                         id: None,
@@ -995,7 +1386,7 @@ async fn start_download_direct(
                             .or_else(|| app_version_hint.clone())
                             .or_else(|| app_ver_id.clone()),
                         account_email: account_email.clone(),
-                        account_region: None,
+                        account_region: account_region.clone(),
                         download_date: Some(Utc::now().to_rfc3339()),
                         status: "completed".to_string(),
                         file_size: file_meta.map(|info| info.len() as i64),
@@ -1013,6 +1404,10 @@ async fn start_download_direct(
                             .or_else(|| artist_name_hint.clone()),
                         progress: Some(100),
                         error: None,
+                        package_kind: Some(decision.package_kind),
+                        ota_installable: Some(decision.ota_installable),
+                        install_method: Some(decision.install_method),
+                        inspection_json,
                         created_at: None,
                     };
                     if let Err(e) = db.lock().unwrap().add_download_record(&record) {
@@ -1106,21 +1501,29 @@ async fn download_file(
     query: web::Query<JobIdQuery>,
     data: web::Data<AppState>,
 ) -> Result<fs::NamedFile, Error> {
-    let job = data
-        .job_store
-        .get(&query.jobId)
-        .await
-        .ok_or_else(|| ErrorNotFound("任务不存在"))?;
-    let snapshot = job.snapshot().await;
+    let file_path = if let Some(job) = data.job_store.get(&query.jobId).await {
+        let snapshot = job.snapshot().await;
+        if snapshot.status != "ready" {
+            return Err(ErrorNotFound("任务尚未就绪"));
+        }
+        snapshot
+            .file_path
+            .clone()
+            .ok_or_else(|| ErrorNotFound("下载文件不存在"))?
+    } else {
+        let record = data
+            .db
+            .lock()
+            .unwrap()
+            .get_download_record_by_job_id(&query.jobId)
+            .map_err(ErrorInternalServerError)?
+            .ok_or_else(|| ErrorNotFound("任务不存在"))?;
+        record
+            .file_path
+            .clone()
+            .ok_or_else(|| ErrorNotFound("下载文件不存在"))?
+    };
 
-    if snapshot.status != "ready" {
-        return Err(ErrorNotFound("任务尚未就绪"));
-    }
-
-    let file_path = snapshot
-        .file_path
-        .clone()
-        .ok_or_else(|| ErrorNotFound("下载文件不存在"))?;
     let path = PathBuf::from(&file_path);
     let file_name = path
         .file_name()
@@ -1147,23 +1550,155 @@ async fn get_job_info(
     let job = match data.job_store.get(&query.jobId).await {
         Some(job) => job,
         None => {
-            return HttpResponse::NotFound()
-                .json(ApiResponse::<String>::error("任务不存在".to_string()))
+            let persisted_record = match data
+                .db
+                .lock()
+                .unwrap()
+                .get_download_record_by_job_id(&query.jobId)
+            {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    return HttpResponse::NotFound()
+                        .json(ApiResponse::<String>::error("任务不存在".to_string()))
+                }
+                Err(error) => {
+                    return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                        format!("读取任务记录失败：{error}"),
+                    ))
+                }
+            };
+
+            let file_exists = persisted_record
+                .file_path
+                .as_ref()
+                .map(|path| PathBuf::from(path).exists())
+                .unwrap_or(false);
+            let inspection = inspection_for_record(&persisted_record);
+            sync_record_delivery(
+                &data.db.lock().unwrap(),
+                &persisted_record,
+                inspection.as_ref(),
+                file_exists,
+            );
+            let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
+            let file_size = persisted_record
+                .file_path
+                .as_ref()
+                .and_then(|path| std::fs::metadata(path).ok())
+                .map(|meta| meta.len());
+            let install_url = if decision.ota_installable {
+                persisted_record.id.and_then(|record_id| {
+                    build_record_install_url(&req, &persisted_record, record_id)
+                })
+            } else {
+                None
+            };
+            let download_url = persisted_record.id.and_then(|record_id| {
+                if file_exists {
+                    Some(build_record_download_url(&req, record_id))
+                } else {
+                    None
+                }
+            });
+
+            return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                "jobId": query.jobId.clone(),
+                "status": if file_exists { "ready" } else { "failed" },
+                "stage": if file_exists { "done" } else { "missing-file" },
+                "progress": if file_exists { 100 } else { persisted_record.progress.unwrap_or(0) },
+                "downloadUrl": download_url,
+                "installUrl": install_url,
+                "packageKind": decision.package_kind,
+                "otaInstallable": decision.ota_installable,
+                "installMethod": decision.install_method,
+                "inspection": inspection,
+                "error": if file_exists { serde_json::Value::Null } else { serde_json::Value::String("任务记录存在，但安装包文件已丢失".to_string()) },
+                "metadata": serde_json::Value::Null,
+                "filePath": persisted_record.file_path,
+                "fileSize": file_size,
+            })));
         }
     };
 
     let snapshot = job.snapshot().await;
+
+    let persisted_record = if snapshot.status == "ready" {
+        data.db
+            .lock()
+            .unwrap()
+            .get_download_record_by_job_id(&query.jobId)
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
+
+    let snapshot_inspection = snapshot
+        .file_path
+        .as_ref()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .as_deref()
+        .and_then(inspect_existing_ipa);
+    let snapshot_file_exists = snapshot
+        .file_path
+        .as_ref()
+        .map(PathBuf::from)
+        .map(|path| path.exists())
+        .unwrap_or(false);
+    let persisted_record_inspection = persisted_record
+        .as_ref()
+        .and_then(|record| inspection_for_record(record));
+    if let Some(record) = persisted_record.as_ref() {
+        if snapshot.status == "ready" {
+            if let Ok(db) = data.db.lock() {
+                sync_record_delivery(
+                    &db,
+                    record,
+                    persisted_record_inspection.as_ref(),
+                    snapshot_file_exists,
+                );
+            }
+        }
+    }
+    let snapshot_decision = if persisted_record.is_some() {
+        derive_delivery_decision(persisted_record_inspection.as_ref(), snapshot_file_exists)
+    } else {
+        derive_delivery_decision(snapshot_inspection.as_ref(), snapshot_file_exists)
+    };
     let install_url = if snapshot.status == "ready" {
-        Some(build_job_install_url(&req, &query.jobId))
+        if !snapshot_decision.ota_installable {
+            None
+        } else if let Some(record) = persisted_record.as_ref() {
+            record
+                .id
+                .and_then(|record_id| build_record_install_url(&req, record, record_id))
+        } else if snapshot.file_path.is_some() {
+            Some(build_job_install_url(&req, &query.jobId))
+        } else {
+            None
+        }
     } else {
         snapshot.install_url.clone()
     };
     let download_url = if snapshot.status == "ready" {
-        Some(format!(
-            "{}/api/download-file?jobId={}",
-            build_base_url(&req),
-            urlencoding::encode(&query.jobId)
-        ))
+        if let Some(record) = persisted_record.as_ref() {
+            if let Some(record_id) = record.id {
+                Some(build_record_download_url(&req, record_id))
+            } else {
+                Some(format!(
+                    "{}/api/public/download-file?jobId={}",
+                    build_base_url(&req),
+                    urlencoding::encode(&query.jobId)
+                ))
+            }
+        } else {
+            Some(format!(
+                "{}/api/public/download-file?jobId={}",
+                build_base_url(&req),
+                urlencoding::encode(&query.jobId)
+            ))
+        }
     } else {
         None
     };
@@ -1180,6 +1715,10 @@ async fn get_job_info(
         "progress": snapshot.progress,
         "downloadUrl": download_url,
         "installUrl": install_url,
+        "packageKind": snapshot_decision.package_kind,
+        "otaInstallable": snapshot_decision.ota_installable,
+        "installMethod": snapshot_decision.install_method,
+        "inspection": if persisted_record.is_some() { persisted_record_inspection } else { snapshot_inspection },
         "error": snapshot.error,
         "metadata": snapshot.metadata,
         "filePath": snapshot.file_path,
@@ -1231,9 +1770,10 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
 
                             return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                                 "url": url,
-                                "fileName": format!("{}_{}.ipa",
+                                "fileName": canonical_ipa_filename(
                                     metadata.and_then(|m| m.get("bundleDisplayName")).and_then(|v| v.as_str()).unwrap_or("app"),
-                                    metadata.and_then(|m| m.get("bundleShortVersionString")).and_then(|v| v.as_str()).unwrap_or("1.0.0")
+                                    metadata.and_then(|m| m.get("bundleShortVersionString")).and_then(|v| v.as_str()).unwrap_or("1.0.0"),
+                                    metadata.and_then(|m| m.get("bundleId")).and_then(|v| v.as_str())
                                 ),
                                 "metadata": {
                                     "bundle_display_name": metadata.and_then(|m| m.get("bundleDisplayName")).and_then(|v| v.as_str()).unwrap_or(""),
@@ -1280,6 +1820,164 @@ async fn get_download_url(query: web::Query<DownloadUrlQuery>) -> impl Responder
         }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
             "获取下载链接失败: {}",
+            e
+        ))),
+    }
+}
+
+async fn claim_app(req: web::Json<ClaimRequest>) -> impl Responder {
+    let accounts = ACCOUNTS.read().await;
+    let account_store = match accounts.get(&req.token) {
+        Some(account) => account,
+        None => {
+            return HttpResponse::Unauthorized()
+                .json(ApiResponse::<String>::error("无效的 token".to_string()))
+        }
+    };
+
+    match account_store
+        .ensure_license(&req.appid, req.appVerId.as_deref())
+        .await
+    {
+        Ok(result) => {
+            let state = result
+                .get("_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("failure");
+
+            if state != "success" {
+                let error_msg = get_license_error_message(&result);
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg));
+            }
+
+            let verify_delays_ms = [0_u64, 1200, 2500, 4000];
+            let mut last_verify_error = String::new();
+
+            for (attempt, delay_ms) in verify_delays_ms.iter().enumerate() {
+                if *delay_ms > 0 {
+                    tokio::time::sleep(std::time::Duration::from_millis(*delay_ms)).await;
+                }
+
+                match account_store
+                    .download_product(&req.appid, req.appVerId.as_deref())
+                    .await
+                {
+                    Ok(verify_result) => {
+                        let verify_state = verify_result
+                            .get("_state")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("failure");
+
+                        if verify_state == "success" {
+                            return HttpResponse::Ok().json(ApiResponse::success(
+                                serde_json::json!({
+                                    "claimed": true,
+                                    "verified": true,
+                                    "verifyAttempts": attempt + 1,
+                                }),
+                            ));
+                        }
+
+                        let verify_error = verify_result
+                            .get("customerMessage")
+                            .or(verify_result.get("failureType"))
+                            .or(verify_result.get("message"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+
+                        let retryable = {
+                            let lowered = verify_error.to_lowercase();
+                            lowered.contains("license not found")
+                                || lowered.contains("not purchased")
+                                || lowered.contains("not found")
+                                || verify_error.contains("未购买")
+                                || verify_error.contains("未领取")
+                                || verify_error.contains("未找到")
+                        };
+
+                        last_verify_error = verify_error;
+                        if !retryable {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        return HttpResponse::InternalServerError().json(
+                            ApiResponse::<String>::error(format!("领取后校验失败: {}", e)),
+                        );
+                    }
+                }
+            }
+
+            let error_msg = if last_verify_error.is_empty() {
+                "Apple 尚未确认领取成功，请稍后刷新或重试".to_string()
+            } else {
+                format!("Apple 正在同步领取状态，请稍后重试：{}", last_verify_error)
+            };
+
+            HttpResponse::BadRequest().json(ApiResponse::<String>::error(error_msg))
+        }
+        Err(e) => HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("领取失败: {}", e))),
+    }
+}
+
+async fn get_purchase_status(query: web::Query<PurchaseStatusQuery>) -> impl Responder {
+    let accounts = ACCOUNTS.read().await;
+    let account_store = match accounts.get(&query.token) {
+        Some(account) => account,
+        None => {
+            return HttpResponse::Unauthorized()
+                .json(ApiResponse::<String>::error("无效的 token".to_string()))
+        }
+    };
+
+    match account_store
+        .download_product(&query.appid, query.appVerId.as_deref())
+        .await
+    {
+        Ok(result) => {
+            let state = result
+                .get("_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("failure");
+
+            if state == "success" {
+                return HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                    "purchased": true,
+                    "needsPurchase": false,
+                    "status": "owned",
+                    "error": null,
+                })));
+            }
+
+            let error_msg = result
+                .get("customerMessage")
+                .or(result.get("failureType"))
+                .or(result.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("下载失败")
+                .to_string();
+
+            let lowered = error_msg.to_lowercase();
+            let is_license_error = lowered.contains("license")
+                || lowered.contains("not found")
+                || lowered.contains("not purchased")
+                || lowered.contains("not owned")
+                || error_msg.contains("未购买")
+                || error_msg.contains("未领取")
+                || error_msg.contains("未找到");
+
+            HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+                "purchased": false,
+                "needsPurchase": is_license_error,
+                "status": if is_license_error { "not_owned" } else { "unknown" },
+                "error": error_msg,
+            })))
+        }
+        Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+            "查询购买状态失败: {}",
             e
         ))),
     }
@@ -1366,6 +2064,215 @@ async fn download_file_with_progress(
     }))
 }
 
+fn sanitize_upload_filename(name: &str) -> String {
+    let base = name
+        .rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .rsplit('\\')
+        .next()
+        .unwrap_or(name);
+
+    let cleaned: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+
+    if cleaned.is_empty() {
+        "upload.ipa".to_string()
+    } else {
+        cleaned
+    }
+}
+
+// 上传 IPA（手动上传到服务器）
+async fn upload_ipa(mut payload: Multipart, data: web::Data<AppState>) -> impl Responder {
+    const MAX_UPLOAD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+    let job_id = Uuid::new_v4().to_string();
+    let uploads_dir = data.downloads_dir.join("uploads");
+    if let Err(e) = tokio::fs::create_dir_all(&uploads_dir).await {
+        return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+            "创建上传目录失败: {}",
+            e
+        )));
+    }
+
+    let mut saved_file_name: Option<String> = None;
+    let mut saved_file_path: Option<PathBuf> = None;
+    let mut saved_file_size: u64 = 0;
+
+    while let Ok(Some(mut field)) = payload.try_next().await {
+        let filename = field
+            .content_disposition()
+            .get_filename()
+            .map(sanitize_upload_filename)
+            .unwrap_or_else(|| "upload.ipa".to_string());
+
+        if !filename.to_lowercase().ends_with(".ipa") {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "只能上传 .ipa 文件".to_string(),
+            ));
+        }
+
+        // Only accept the first file field
+        if saved_file_path.is_some() {
+            continue;
+        }
+
+        let target_path = uploads_dir.join(format!("{}-{}", job_id, filename));
+        let mut f = match tokio::fs::File::create(&target_path).await {
+            Ok(file) => file,
+            Err(e) => {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("创建上传文件失败: {}", e),
+                ));
+            }
+        };
+
+        while let Ok(Some(chunk)) = field.try_next().await {
+            saved_file_size = saved_file_size.saturating_add(chunk.len() as u64);
+            if saved_file_size > MAX_UPLOAD_BYTES {
+                let _ = tokio::fs::remove_file(&target_path).await;
+                return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                    "上传文件不能超过 2GB".to_string(),
+                ));
+            }
+            if let Err(e) = f.write_all(&chunk).await {
+                let _ = tokio::fs::remove_file(&target_path).await;
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("写入上传文件失败: {}", e),
+                ));
+            }
+        }
+
+        saved_file_name = Some(filename);
+        saved_file_path = Some(target_path);
+    }
+
+    let Some(file_path) = saved_file_path else {
+        return HttpResponse::BadRequest()
+            .json(ApiResponse::<String>::error("未找到上传文件".to_string()));
+    };
+
+    let file_name = saved_file_name.unwrap_or_else(|| "upload.ipa".to_string());
+    let absolute_path = file_path.to_string_lossy().to_string();
+
+    if let Ok(db) = data.db.lock() {
+        let inspection = inspect_existing_ipa(Path::new(&absolute_path));
+        let decision = derive_delivery_decision(inspection.as_ref(), true);
+        let inspection_json = inspection
+            .as_ref()
+            .and_then(|value| serde_json::to_string(value).ok());
+        let record = DownloadRecord {
+            id: None,
+            job_id: Some(job_id.clone()),
+            app_name: file_name.trim_end_matches(".ipa").to_string(),
+            app_id: "uploaded".to_string(),
+            bundle_id: None,
+            version: None,
+            account_email: "手动上传".to_string(),
+            account_region: None,
+            download_date: Some(Utc::now().to_rfc3339()),
+            status: "completed".to_string(),
+            file_size: Some(saved_file_size as i64),
+            file_path: Some(absolute_path.clone()),
+            install_url: None,
+            artwork_url: None,
+            artist_name: None,
+            progress: Some(100),
+            error: None,
+            package_kind: Some(decision.package_kind),
+            ota_installable: Some(decision.ota_installable),
+            install_method: Some(decision.install_method),
+            inspection_json,
+            created_at: None,
+        };
+        let _ = db.add_download_record(&record);
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "jobId": job_id,
+        "fileName": file_name,
+        "fileSize": saved_file_size,
+        "filePath": absolute_path,
+        "installUrl": null,
+    })))
+}
+
+fn format_itunes_app(app: &serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "trackId": app.get("trackId")
+            .and_then(|v| v.as_i64())
+            .map(|v| v.to_string())
+            .or_else(|| app.get("trackId").and_then(|v| v.as_str()).map(|v| v.to_string()))
+            .unwrap_or_default(),
+        "trackName": app.get("trackName").and_then(|v| v.as_str()).unwrap_or(""),
+        "bundleId": app.get("bundleId").and_then(|v| v.as_str()).unwrap_or(""),
+        "artistName": app.get("artistName").and_then(|v| v.as_str()).unwrap_or(""),
+        "artworkUrl60": app.get("artworkUrl60").and_then(|v| v.as_str()).unwrap_or(""),
+        "artworkUrl100": app.get("artworkUrl100").and_then(|v| v.as_str()).unwrap_or(""),
+        "version": app.get("version").and_then(|v| v.as_str()).unwrap_or(""),
+        "averageUserRating": app.get("averageUserRating").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "price": app.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        "formattedPrice": app.get("formattedPrice").and_then(|v| v.as_str()).unwrap_or(""),
+        "fileSizeBytes": app.get("fileSizeBytes")
+            .and_then(|v| v.as_str())
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0),
+        "genres": app.get("genres").and_then(|v| v.as_array()).cloned().unwrap_or(vec![]),
+    })
+}
+
+async fn app_meta(query: web::Query<AppMetaQuery>) -> impl Responder {
+    use reqwest::Client;
+
+    let region = query.region.as_deref().unwrap_or("US");
+    let url = format!(
+        "https://itunes.apple.com/lookup?id={}&country={}",
+        urlencoding::encode(&query.appid),
+        region
+    );
+
+    match Client::new().get(&url).send().await {
+        Ok(response) => {
+            if !response.status().is_success() {
+                return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    "lookup API 返回错误".to_string(),
+                ));
+            }
+
+            match response.json::<serde_json::Value>().await {
+                Ok(json) => {
+                    if let Some(app) = json
+                        .get("results")
+                        .and_then(|v| v.as_array())
+                        .and_then(|arr| arr.first())
+                    {
+                        HttpResponse::Ok().json(ApiResponse::success(format_itunes_app(app)))
+                    } else {
+                        HttpResponse::NotFound()
+                            .json(ApiResponse::<String>::error("未找到应用元数据".to_string()))
+                    }
+                }
+                Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                    format!("解析应用元数据失败: {}", e),
+                )),
+            }
+        }
+        Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
+            "获取应用元数据失败: {}",
+            e
+        ))),
+    }
+}
+
 // 搜索应用
 async fn search_app(
     query: web::Query<std::collections::HashMap<String, String>>,
@@ -1414,22 +2321,8 @@ async fn search_app(
                             if results > 0 {
                                 if let Some(apps) = json.get("results").and_then(|v| v.as_array()) {
                                     // 转换为我们的格式
-                                    let formatted_apps: Vec<serde_json::Value> = apps
-                                        .iter()
-                                        .map(|app| {
-                                            serde_json::json!({
-                                                "trackId": app.get("trackId").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "trackName": app.get("trackName").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "bundleId": app.get("bundleId").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "artistName": app.get("artistName").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "artworkUrl100": app.get("artworkUrl100").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "version": app.get("version").and_then(|v| v.as_str()).unwrap_or(""),
-                                                "averageUserRating": app.get("averageUserRating").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                                "price": app.get("price").and_then(|v| v.as_f64()).unwrap_or(0.0),
-                                                "genres": app.get("genres").and_then(|v| v.as_array()).cloned().unwrap_or(vec![]),
-                                            })
-                                        })
-                                        .collect();
+                                    let formatted_apps: Vec<serde_json::Value> =
+                                        apps.iter().map(format_itunes_app).collect();
 
                                     return HttpResponse::Ok()
                                         .json(ApiResponse::success(formatted_apps));
@@ -1527,17 +2420,25 @@ async fn apple_login(
                     .unwrap_or("")
                     .to_string();
 
+                let mut region_for_response = resolved_account_region(&result, None);
+
                 // 存储账号到内存
                 let mut accounts = ACCOUNTS.write().await;
                 accounts.insert(token.clone(), account_store);
 
                 // 持久化账号到 DB
                 if let Ok(db) = data.db.lock() {
+                    let existing_region = db
+                        .get_latest_account_region_by_email(&req.email)
+                        .ok()
+                        .flatten();
+                    let region = resolved_account_region(&result, existing_region);
+                    region_for_response = region.clone();
                     let db_account = ipa_webtool_services::Account {
                         id: None,
                         token: token.clone(),
                         email: req.email.clone(),
-                        region: "US".to_string(),
+                        region,
                         guid: None,
                         cookie_user: None,
                         cookies: None,
@@ -1582,6 +2483,7 @@ async fn apple_login(
                     "token": token,
                     "email": req.email,
                     "dsid": dsid,
+                    "region": region_for_response,
                     "displayName": result.get("displayName"),
                 })))
             } else {
@@ -1664,14 +2566,24 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
     let accounts = ACCOUNTS.read().await;
     let mut list: Vec<serde_json::Value> = Vec::new();
 
-    let saved_credential_emails: std::collections::HashSet<String> = if let Ok(db) = data.db.lock()
-    {
-        match db.get_all_credentials() {
+    let (saved_credential_emails, account_regions): (
+        std::collections::HashSet<String>,
+        HashMap<String, String>,
+    ) = if let Ok(db) = data.db.lock() {
+        let saved_credential_emails = match db.get_all_credentials() {
             Ok(creds) => creds.into_iter().map(|c| c.email).collect(),
             Err(_) => std::collections::HashSet::new(),
-        }
+        };
+        let account_regions = match db.get_all_accounts() {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|account| (account.token, account.region))
+                .collect(),
+            Err(_) => HashMap::new(),
+        };
+        (saved_credential_emails, account_regions)
     } else {
-        std::collections::HashSet::new()
+        (std::collections::HashSet::new(), HashMap::new())
     };
 
     for (token, store) in accounts.iter() {
@@ -1690,12 +2602,18 @@ async fn get_account_list(data: web::Data<AppState>) -> impl Responder {
             .as_ref()
             .and_then(|ai| ai.display_name.clone());
         let has_saved_credentials = saved_credential_emails.contains(&email);
+        let region = account_regions
+            .get(token)
+            .cloned()
+            .filter(|value| !value.is_empty())
+            .or_else(|| store.auth_info.as_ref().and_then(|ai| ai.region.clone()))
+            .unwrap_or_else(|| "US".to_string());
 
         list.push(serde_json::json!({
             "token": token,
             "email": email,
             "dsid": dsid,
-            "region": "US",
+            "region": region,
             "displayName": display_name,
             "hasSavedCredentials": has_saved_credentials,
         }));
@@ -1844,13 +2762,21 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
                     let mut accounts = ACCOUNTS.write().await;
                     accounts.insert(token.clone(), store);
 
+                    let mut region_for_response = resolved_account_region(&result, None);
+
                     // 持久化
                     if let Ok(db) = data.db.lock() {
+                        let existing_region = db
+                            .get_latest_account_region_by_email(&cred.email)
+                            .ok()
+                            .flatten();
+                        let region = resolved_account_region(&result, existing_region);
+                        region_for_response = region.clone();
                         let db_account = ipa_webtool_services::Account {
                             id: None,
                             token: token.clone(),
                             email: cred.email.clone(),
-                            region: "US".to_string(),
+                            region,
                             guid: None,
                             cookie_user: None,
                             cookies: None,
@@ -1864,6 +2790,7 @@ async fn auto_login_all(data: web::Data<AppState>) -> impl Responder {
                         "email": cred.email,
                         "token": token,
                         "dsid": dsid,
+                        "region": region_for_response,
                         "alreadyLoggedIn": false,
                     }));
                 } else {
@@ -1968,12 +2895,24 @@ async fn refresh_login(
                 .and_then(|v| v.as_str())
                 .unwrap_or("failure");
             if state == "success" {
+                let mut region_for_response = resolved_account_region(&result, None);
+
                 // 更新内存中的账号
                 let mut accounts = ACCOUNTS.write().await;
                 accounts.insert(token.clone(), store);
+
+                if let Ok(db) = data.db.lock() {
+                    let existing_region =
+                        db.get_latest_account_region_by_email(&email).ok().flatten();
+                    let region = resolved_account_region(&result, existing_region);
+                    region_for_response = region.clone();
+                    let _ = db.update_account_region(&token, &region);
+                }
+
                 HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
                     "ok": true,
                     "email": email,
+                    "region": region_for_response,
                 })))
             } else {
                 let err_msg = result
@@ -2011,7 +2950,7 @@ async fn admin_login(
             log::error!("[auth:login] failed to acquire db lock");
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
                 "认证服务暂时不可用".to_string(),
-            ))
+            ));
         }
     };
 
@@ -2020,14 +2959,13 @@ async fn admin_login(
         Ok(None) => {
             log::warn!("[auth:login] user not found: {}", username);
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("用户名或密码错误".to_string()))
+                .json(ApiResponse::<String>::error("用户名或密码错误".to_string()));
         }
         Err(e) => {
             log::error!("[auth:login] db error looking up user {}: {}", username, e);
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "查询管理员失败: {}",
-                e
-            )))
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("查询管理员失败: {}", e),
+            ));
         }
     };
 
@@ -2112,10 +3050,13 @@ async fn change_password(
     let db = match data.db.lock() {
         Ok(db) => db,
         Err(_) => {
-            log::error!("[auth:change-pwd] db lock failed for user={}", admin.username);
+            log::error!(
+                "[auth:change-pwd] db lock failed for user={}",
+                admin.username
+            );
             return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
                 "认证服务暂时不可用".to_string(),
-            ))
+            ));
         }
     };
 
@@ -2124,19 +3065,21 @@ async fn change_password(
         Ok(None) => {
             log::warn!("[auth:change-pwd] user not found: {}", admin.username);
             return HttpResponse::Unauthorized()
-                .json(ApiResponse::<String>::error("管理员账号不存在".to_string()))
+                .json(ApiResponse::<String>::error("管理员账号不存在".to_string()));
         }
         Err(e) => {
             log::error!("[auth:change-pwd] db error for {}: {}", admin.username, e);
-            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "查询管理员失败: {}",
-                e
-            )))
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("查询管理员失败: {}", e),
+            ));
         }
     };
 
     if user.password_hash != hash_password(&req.current_password) {
-        log::warn!("[auth:change-pwd] wrong current password for user={}", admin.username);
+        log::warn!(
+            "[auth:change-pwd] wrong current password for user={}",
+            admin.username
+        );
         return HttpResponse::BadRequest()
             .json(ApiResponse::<String>::error("当前密码不正确".to_string()));
     }
@@ -2169,11 +3112,9 @@ async fn change_password(
                 admin.username,
                 e
             );
-            return HttpResponse::InternalServerError()
-                .json(ApiResponse::<String>::error(format!(
-                    "修改密码/用户名失败: {}",
-                    e
-                )));
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("修改密码/用户名失败: {}", e),
+            ));
         }
     };
 
@@ -2205,6 +3146,31 @@ async fn get_manifest(
             ));
         }
 
+        let file_exists = snapshot
+            .file_path
+            .as_ref()
+            .map(PathBuf::from)
+            .map(|path| path.exists())
+            .unwrap_or(false);
+        let inspection = snapshot
+            .file_path
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|path| path.exists())
+            .as_deref()
+            .and_then(inspect_existing_ipa);
+        let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
+        if !decision.ota_installable {
+            let reason = inspection
+                .as_ref()
+                .map(|value| value.summary.clone())
+                .unwrap_or_else(|| "该 IPA 不支持 OTA 安装".to_string());
+            return HttpResponse::Forbidden().json(ApiResponse::<String>::error(format!(
+                "已拦截 manifest 生成：{}",
+                reason
+            )));
+        }
+
         let metadata = match snapshot.metadata {
             Some(metadata) => metadata,
             None => {
@@ -2214,7 +3180,7 @@ async fn get_manifest(
         };
 
         let download_url = format!(
-            "{}/api/download-file?jobId={}",
+            "{}/api/public/download-file?jobId={}",
             build_base_url(&req),
             urlencoding::encode(job_id)
         );
@@ -2262,11 +3228,8 @@ async fn get_manifest(
 
     match manifest_result {
         Ok(plist) => HttpResponse::Ok()
-            .content_type("application/x-plist")
-            .insert_header((
-                "Content-Disposition",
-                "attachment; filename=\"manifest.plist\"",
-            ))
+            .content_type("application/xml; charset=utf-8")
+            .insert_header(("Cache-Control", "no-store"))
             .body(plist),
         Err(error) => {
             log::error!("Failed to generate plist: {}", error);
@@ -2278,39 +3241,118 @@ async fn get_manifest(
     }
 }
 
-// OTA 安装端点 - 生成并返回 .mobileconfig 文件
+// Plist token 解析端点（仿 OpenList /i/:link_name.plist）
+async fn plist_from_token(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64;
+    use base64::Engine as _;
+
+    let raw = path.into_inner();
+    let token = raw.strip_suffix(".plist").unwrap_or(&raw);
+
+    let decoded = match BASE64.decode(token) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::warn!("invalid plist token base64: {}", e);
+            return HttpResponse::BadRequest().body("invalid plist token");
+        }
+    };
+
+    let decoded_str = match String::from_utf8(decoded) {
+        Ok(s) => s,
+        Err(_) => {
+            return HttpResponse::BadRequest().body("invalid plist token encoding");
+        }
+    };
+
+    let parts: Vec<&str> = decoded_str.splitn(3, '/').collect();
+    if parts.len() < 2 {
+        return HttpResponse::BadRequest().body("malformed plist token");
+    }
+
+    let link_encode = parts[0];
+    let name_encode = parts[1];
+    let version_encode = parts.get(2).copied();
+
+    let link_str = match urlencoding::decode(link_encode) {
+        Ok(v) => v.into_owned(),
+        Err(_) => return HttpResponse::BadRequest().body("invalid url in plist token"),
+    };
+
+    // Hard block: if this token points to a download record whose IPA is not directly side-loadable,
+    // stop before returning a plist. This prevents users from installing and then hitting black-screen crash.
+    if let Some(record_id) = extract_record_id_from_download_url(&link_str) {
+        let record = data
+            .db
+            .lock()
+            .unwrap()
+            .get_download_record(record_id)
+            .ok()
+            .flatten();
+
+        if let Some(record) = record {
+            if let Some(file_path) = record.file_path.clone() {
+                let path = PathBuf::from(file_path);
+                if path.exists() {
+                    if let Some(inspection) = inspect_existing_ipa(&path) {
+                        if inspection_blocks_install(&inspection) {
+                            let message = format!("已拦截安装：{}", inspection.summary);
+                            return HttpResponse::Forbidden()
+                                .content_type("text/plain; charset=utf-8")
+                                .insert_header(("Cache-Control", "no-store"))
+                                .body(message);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let name_full = match urlencoding::decode(name_encode) {
+        Ok(v) => v.into_owned(),
+        Err(_) => return HttpResponse::BadRequest().body("invalid name in plist token"),
+    };
+
+    let mut name = name_full.clone();
+    let mut identifier = format!("org.ipatool.{}", name_full);
+    if let Some(idx) = name_full.rfind('@') {
+        name = name_full[..idx].to_string();
+        identifier = name_full[idx + 1..].to_string();
+    }
+
+    let bundle_version = match version_encode {
+        Some(encoded) => match urlencoding::decode(encoded) {
+            Ok(v) => v.into_owned(),
+            Err(_) => return HttpResponse::BadRequest().body("invalid version in plist token"),
+        },
+        None => "1.0".to_string(),
+    };
+
+    let plist_result = generate_plist(link_str, identifier, bundle_version, name);
+
+    match plist_result {
+        Ok(plist) => HttpResponse::Ok()
+            .content_type("application/xml; charset=utf-8")
+            .insert_header(("Cache-Control", "no-store"))
+            .body(plist),
+        Err(err) => {
+            log::error!("Failed to generate plist from token: {}", err);
+            HttpResponse::InternalServerError().body("failed to generate plist")
+        }
+    }
+}
+
+// OTA 安装端点 - 跳转到 itms-services 触发 iOS 原生安装
 async fn install(query: web::Query<InstallQuery>) -> impl Responder {
     log::info!("OTA install request, manifest URL: {}", query.manifest);
 
-    // 从 manifest URL 中提取应用名称作为显示名称
-    let display_name = if let Some(filename) = query.manifest.rsplit('/').next() {
-        filename
-            .trim_end_matches(".plist")
-            .trim_end_matches(".ipa")
-            .to_string()
-    } else {
-        "Application".to_string()
-    };
+    let install_url = format!(
+        "itms-services://?action=download-manifest&url={}",
+        urlencoding::encode(&query.manifest)
+    );
 
-    match generate_mobileconfig(query.manifest.clone(), display_name) {
-        Ok(mobileconfig) => {
-            // 返回 .mobileconfig 文件
-            HttpResponse::Ok()
-                .content_type("application/x-apple-aspen-config")
-                .insert_header((
-                    "Content-Disposition",
-                    "attachment; filename=\"install.mobileconfig\"",
-                ))
-                .body(mobileconfig)
-        }
-        Err(e) => {
-            log::error!("Failed to generate mobileconfig: {}", e);
-            HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-                "生成安装描述文件失败: {}",
-                e
-            )))
-        }
-    }
+    HttpResponse::Found()
+        .insert_header(("Location", install_url))
+        .finish()
 }
 
 // ============ 批量下载相关端点 ============
@@ -2471,55 +3513,102 @@ async fn delete_batch_task(path: web::Path<i64>, data: web::Data<AppState>) -> i
 async fn get_download_records(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     {
         let db = data.db.lock().unwrap();
+        normalize_download_record_artifact_paths(&db, &data.downloads_dir);
         sync_download_records_from_filesystem(&db, &data.downloads_dir);
     }
 
-    match data.db.lock().unwrap().get_all_download_records() {
-        Ok(records) => {
-            let items = records
-                .into_iter()
-                .map(|record| {
-                    let file_exists = record
-                        .file_path
-                        .as_ref()
-                        .map(|path| Path::new(path).exists())
-                        .unwrap_or(false);
-                    let record_id = record.id;
-                    let download_url = record_id.map(|id| build_record_download_url(&req, id));
-                    let install_url = record_id.and_then(|id| build_record_install_url(&req, &record, id));
-
-                    DownloadRecordView {
-                        id: record.id,
-                        job_id: record.job_id,
-                        app_name: record.app_name,
-                        app_id: record.app_id,
-                        bundle_id: record.bundle_id,
-                        version: record.version,
-                        account_email: record.account_email,
-                        account_region: record.account_region,
-                        download_date: record.download_date,
-                        status: record.status,
-                        file_size: record.file_size,
-                        file_path: record.file_path,
-                        download_url,
-                        install_url,
-                        artwork_url: record.artwork_url,
-                        artist_name: record.artist_name,
-                        progress: record.progress,
-                        error: record.error,
-                        created_at: record.created_at,
-                        file_exists,
-                    }
-                })
-                .collect::<Vec<_>>();
-
-            HttpResponse::Ok().json(ApiResponse::success(items))
+    let records = {
+        let db = data.db.lock().unwrap();
+        match db.get_all_download_records() {
+            Ok(r) => r,
+            Err(e) => {
+                log::error!("[records] failed to get records: {}", e);
+                return HttpResponse::InternalServerError()
+                    .json(ApiResponse::<String>::error("获取下载记录失败".to_string()));
+            }
         }
-        Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<String>::error(format!(
-            "获取下载记录失败: {}",
-            e
-        ))),
+    };
+
+    // Backfill inspection for records that lack it (outside db lock to avoid deadlock)
+    let backfill: Vec<(i64, String)> = records
+        .iter()
+        .filter(|r| {
+            r.inspection_json.is_none()
+                && r.file_path
+                    .as_ref()
+                    .map(|p| PathBuf::from(p).exists())
+                    .unwrap_or(false)
+        })
+        .filter_map(|r| {
+            let path = PathBuf::from(r.file_path.as_ref()?);
+            let inspection = inspect_existing_ipa(&path)?;
+            let json = serde_json::to_string(&inspection).ok()?;
+            Some((r.id?, json))
+        })
+        .collect();
+
+    if !backfill.is_empty() {
+        let db = data.db.lock().unwrap();
+        for (record_id, json) in backfill {
+            let _ = db.update_download_record_delivery(
+                record_id,
+                None,
+                None,
+                None,
+                Some(json.as_str()),
+            );
+        }
     }
+
+    let items = records
+        .into_iter()
+        .map(|record| {
+            let inspection = inspection_for_record(&record);
+            let file_exists = record
+                .file_path
+                .as_ref()
+                .map(PathBuf::from)
+                .map(|path| path.exists())
+                .unwrap_or(false);
+            let decision = derive_delivery_decision(inspection.as_ref(), file_exists);
+            let record_id = record.id;
+            let download_url = record_id.map(|id| build_record_download_url(&req, id));
+            let install_url = if decision.ota_installable {
+                record_id.and_then(|id| build_record_install_url(&req, &record, id))
+            } else {
+                None
+            };
+
+            DownloadRecordView {
+                id: record.id,
+                job_id: record.job_id,
+                app_name: record.app_name,
+                app_id: record.app_id,
+                bundle_id: record.bundle_id,
+                version: record.version,
+                account_email: record.account_email,
+                account_region: record.account_region,
+                download_date: record.download_date,
+                status: record.status,
+                file_size: record.file_size,
+                file_path: record.file_path,
+                download_url,
+                install_url,
+                artwork_url: record.artwork_url,
+                artist_name: record.artist_name,
+                progress: record.progress,
+                error: record.error,
+                package_kind: decision.package_kind,
+                ota_installable: decision.ota_installable,
+                install_method: decision.install_method,
+                created_at: record.created_at,
+                file_exists,
+                inspection,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    HttpResponse::Ok().json(ApiResponse::success(items))
 }
 
 async fn download_record_file(
@@ -2557,6 +3646,7 @@ async fn download_record_file(
 async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
     let records = {
         let db = data.db.lock().unwrap();
+        normalize_download_record_artifact_paths(&db, &data.downloads_dir);
         sync_download_records_from_filesystem(&db, &data.downloads_dir);
         db.get_all_download_records().unwrap_or_default()
     };
@@ -2568,17 +3658,60 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
         }
     }
 
-    let items = scan_download_artifacts(&data.downloads_dir)
+    let artifacts = scan_download_artifacts(&data.downloads_dir);
+
+    let backfill: Vec<(i64, String)> = artifacts
+        .iter()
+        .filter_map(|artifact| {
+            let path_string = artifact.path.to_string_lossy().to_string();
+            let record = record_by_path.get(&path_string)?;
+            if record.inspection_json.is_some() {
+                return None;
+            }
+            let inspection = inspection_for_record(record)?;
+            let json = serde_json::to_string(&inspection).ok()?;
+            Some((record.id?, json))
+        })
+        .collect();
+
+    if !backfill.is_empty() {
+        let db = data.db.lock().unwrap();
+        for (record_id, json) in backfill {
+            let _ = db.update_download_record_delivery(
+                record_id,
+                None,
+                None,
+                None,
+                Some(json.as_str()),
+            );
+        }
+    }
+
+    let items = artifacts
         .into_iter()
         .map(|artifact| {
             let path_string = artifact.path.to_string_lossy().to_string();
             let record = record_by_path.get(&path_string);
             let fallback_name = artifact.file_name.trim_end_matches(".ipa").to_string();
-            let download_url = format!("{}/api/ipa-files/{}/download", build_base_url(&req), artifact.id);
-            let install_url = record.and_then(|record| {
-                let record_id = record.id?;
-                build_record_install_url(&req, record, record_id)
-            });
+            let download_url = format!(
+                "{}/api/ipa-files/{}/download",
+                build_base_url(&req),
+                artifact.id
+            );
+            let inspection = if let Some(record) = record {
+                inspection_for_record(record)
+            } else {
+                inspect_existing_ipa(&artifact.path)
+            };
+            let decision = derive_delivery_decision(inspection.as_ref(), true);
+            let install_url = if decision.ota_installable {
+                record.and_then(|record| {
+                    let record_id = record.id?;
+                    build_record_install_url(&req, record, record_id)
+                })
+            } else {
+                None
+            };
 
             IpaArtifactView {
                 id: artifact.id,
@@ -2602,6 +3735,10 @@ async fn get_ipa_files(req: HttpRequest, data: web::Data<AppState>) -> impl Resp
                 record_id: record.and_then(|item| item.id),
                 download_url,
                 install_url,
+                package_kind: decision.package_kind,
+                ota_installable: decision.ota_installable,
+                install_method: decision.install_method,
+                inspection,
             }
         })
         .collect::<Vec<_>>();
@@ -2675,6 +3812,80 @@ async fn clear_download_records(data: web::Data<AppState>) -> impl Responder {
         Err(e) => HttpResponse::InternalServerError()
             .json(ApiResponse::<String>::error(format!("清空记录失败: {}", e))),
     }
+}
+
+async fn cleanup_download_record_file(
+    path: web::Path<i64>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let id = path.into_inner();
+
+    let record = match data.db.lock().unwrap().get_download_record(id) {
+        Ok(Some(record)) => record,
+        Ok(None) => {
+            return HttpResponse::NotFound()
+                .json(ApiResponse::<String>::error("记录不存在".to_string()))
+        }
+        Err(e) => {
+            return HttpResponse::InternalServerError()
+                .json(ApiResponse::<String>::error(format!("查询记录失败: {}", e)))
+        }
+    };
+
+    let file_path = match record.file_path.clone() {
+        Some(path) if !path.is_empty() => path,
+        _ => {
+            return HttpResponse::BadRequest().json(ApiResponse::<String>::error(
+                "记录未保存文件路径".to_string(),
+            ))
+        }
+    };
+
+    let path_buf = PathBuf::from(&file_path);
+    let mut freed_bytes = 0u64;
+    let mut file_deleted = false;
+
+    if let Ok(meta) = tokio::fs::metadata(&path_buf).await {
+        freed_bytes = meta.len();
+        if let Err(e) = tokio::fs::remove_file(&path_buf).await {
+            return HttpResponse::InternalServerError().json(ApiResponse::<String>::error(
+                format!("删除安装包失败: {}", e),
+            ));
+        }
+        file_deleted = true;
+    }
+
+    if let Some(parent) = path_buf.parent() {
+        let is_jobs_child = parent
+            .strip_prefix(data.downloads_dir.join("jobs"))
+            .ok()
+            .is_some();
+        if is_jobs_child {
+            let mut empty = true;
+            if let Ok(mut entries) = tokio::fs::read_dir(parent).await {
+                while let Ok(Some(_)) = entries.next_entry().await {
+                    empty = false;
+                    break;
+                }
+            }
+            if empty {
+                let _ = tokio::fs::remove_dir(parent).await;
+            }
+        }
+    }
+
+    if let Err(e) = data.db.lock().unwrap().delete_download_record(id) {
+        return HttpResponse::InternalServerError()
+            .json(ApiResponse::<String>::error(format!("删除记录失败: {}", e)));
+    }
+
+    HttpResponse::Ok().json(ApiResponse::success(serde_json::json!({
+        "recordId": id,
+        "fileDeleted": file_deleted,
+        "freed_bytes": freed_bytes,
+        "freed_mb": ((freed_bytes as f64) / 1024.0 / 1024.0 * 10.0).round() / 10.0,
+        "filePath": file_path,
+    })))
 }
 
 // 清理服务器上的下载文件
@@ -2828,6 +4039,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(web::JsonConfig::default().limit(4096))
             .app_data(app_state.clone())
+            .route("/i/{token}.plist", web::get().to(plist_from_token))
             .service(
                 web::scope("/api")
                     // 公开路由：管理员认证
@@ -2837,6 +4049,16 @@ async fn main() -> std::io::Result<()> {
                             .route("/logout", web::post().to(logout))
                             .route("/me", web::get().to(me))
                             .route("/change-password", web::post().to(change_password)),
+                    )
+                    // 公开 OTA / 下载路由（iOS 安装器不会携带后台登录 cookie）
+                    .service(
+                        web::scope("/public")
+                            .route("/download-file", web::get().to(download_file))
+                            .route("/manifest", web::get().to(get_manifest))
+                            .route("/install", web::get().to(install))
+                            .route("/download-records/{id}/file", web::get().to(download_record_file))
+                            .route("/download-records/{id}/file", web::delete().to(cleanup_download_record_file))
+                            .route("/ipa-files/{id}/download", web::get().to(download_ipa_file)),
                     )
                     // 需要管理员认证的路由
                     .service(
@@ -2851,14 +4073,15 @@ async fn main() -> std::io::Result<()> {
                             .route("/login/refresh", web::post().to(refresh_login))
                             .route("/versions", web::get().to(get_versions))
                             .route("/download-url", web::get().to(get_download_url))
+                            .route("/purchase-status", web::get().to(get_purchase_status))
+                            .route("/claim", web::post().to(claim_app))
                             .route("/start-download-direct", web::post().to(start_download_direct))
                             .route("/progress-sse", web::get().to(progress_sse))
-                            .route("/download-file", web::get().to(download_file))
                             .route("/job-info", web::get().to(get_job_info))
                             .route("/download", web::post().to(download_ipa))
+                            .route("/upload-ipa", web::post().to(upload_ipa))
                             .route("/search", web::get().to(search_app))
-                            .route("/manifest", web::get().to(get_manifest))
-                            .route("/install", web::get().to(install))
+                            .route("/app-meta", web::get().to(app_meta))
                             .route("/batch-download", web::post().to(start_batch_download))
                             .route("/batch-tasks", web::get().to(get_batch_tasks))
                             .route("/batch-tasks/{id}", web::get().to(get_batch_task))
@@ -2866,9 +4089,7 @@ async fn main() -> std::io::Result<()> {
                             .route("/download-records", web::get().to(get_download_records))
                             .route("/download-records", web::delete().to(clear_download_records))
                             .route("/download-records/{id}", web::delete().to(delete_download_record))
-                            .route("/download-records/{id}/file", web::get().to(download_record_file))
                             .route("/ipa-files", web::get().to(get_ipa_files))
-                            .route("/ipa-files/{id}/download", web::get().to(download_ipa_file))
                             .route("/ipa-files/{id}", web::delete().to(delete_ipa_file))
                             .route("/cleanup-downloads", web::post().to(cleanup_downloads))
                             .route("/subscriptions", web::get().to(get_subscriptions))

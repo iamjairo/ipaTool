@@ -2,9 +2,10 @@ use crate::database::{Database, DownloadRecord};
 use crate::ipa_handler::{
     download_ipa_with_account, AppleAuthService, DownloadParams, DownloadResult,
 };
+use crate::signature::inspect_ipa_path;
 use reqwest::Client;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -165,11 +166,11 @@ impl DownloadManager {
                 account_email,
                 resume_position,
             )
-                .await
+            .await
             {
                 Ok(result) => {
                     // 记录成功下载
-                    if let Some(file_path) = result.file {
+                    if let Some(ref file_path) = result.file {
                         let file_meta = std::fs::metadata(&file_path).ok();
                         let metadata = result.metadata;
                         let record = DownloadRecord {
@@ -194,7 +195,7 @@ impl DownloadManager {
                             download_date: Some(chrono::Utc::now().to_rfc3339()),
                             status: "completed".to_string(),
                             file_size: file_meta.map(|info| info.len() as i64),
-                            file_path: Some(file_path),
+                            file_path: Some(file_path.clone()),
                             install_url: None,
                             artwork_url: metadata
                                 .as_ref()
@@ -206,10 +207,46 @@ impl DownloadManager {
                                 .filter(|value| !value.is_empty()),
                             progress: Some(100),
                             error: None,
+                            package_kind: None,
+                            ota_installable: None,
+                            install_method: None,
+                            inspection_json: None,
                             created_at: None,
                         };
                         let _ = db.lock().unwrap().add_download_record(&record);
                     }
+
+                    // Inspect IPA and persist delivery decision so the first poll
+                    // already has the correct package_kind / ota_installable.
+                    if let Some(ref fp) = result.file {
+                        if let Ok(inspection) = inspect_ipa_path(Path::new(fp)) {
+                            let has_embedded = inspection.has_embedded_mobileprovision;
+                            let direct_ok = inspection.direct_install_ok;
+                            let (package_kind, ota, method) = if direct_ok && has_embedded {
+                                ("ota_sideloadable".to_string(), true, "ota".to_string())
+                            } else if inspection.has_sc_info_manifest
+                                || !inspection.encrypted_binaries.is_empty()
+                            {
+                                ("fairplay_appstore_package".to_string(), false, "download_only".to_string())
+                            } else {
+                                ("unknown".to_string(), false, "manual_review".to_string())
+                            };
+                            let inspection_json = serde_json::to_string(&inspection).ok();
+                            // Find the record we just inserted (by file_path) and patch delivery fields.
+                            if let Ok(db_guard) = db.lock() {
+                                if let Ok(Some(rec)) = db_guard.get_download_record_by_file_path(fp) {
+                                    let _ = db_guard.update_download_record_delivery(
+                                        rec.id.unwrap_or(0),
+                                        Some(package_kind.as_str()),
+                                        Some(ota),
+                                        Some(method.as_str()),
+                                        inspection_json.as_deref(),
+                                    );
+                                }
+                            }
+                        }
+                    }
+
                     return Ok(());
                 }
                 Err(e) => {
@@ -327,10 +364,18 @@ impl DownloadManager {
 
         let response1 = self.client.get(&url1).send().await;
         let versions = if let Ok(resp) = response1 {
-            resp.json::<Value>()
-                .await
-                .ok()
-                .and_then(|json| json.get("data").and_then(|d| d.as_array()).cloned())
+            if let Ok(json) = resp.json::<Value>().await {
+                // Handle both {data: [...]} and direct [...] formats
+                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
+                    Some(data.clone())
+                } else if json.is_array() {
+                    Some(json.as_array().cloned().unwrap_or_default())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         } else {
             None
         };

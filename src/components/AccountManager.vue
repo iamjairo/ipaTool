@@ -251,6 +251,16 @@ const emit = defineEmits(['accounts-updated'])
 
 const accounts = ref([])
 const savedCredentials = ref([]) // 保存的账号密码（仅邮箱）
+const accountIdentityKey = (acc = {}) => String(acc.email || acc.dsid || acc.token || '').trim().toLowerCase()
+const dedupeAccounts = (list = []) => {
+	const map = new Map()
+	for (const acc of list) {
+		const key = accountIdentityKey(acc)
+		if (!key) continue
+		map.set(key, acc)
+	}
+	return [...map.values()]
+}
 const newAccount = ref({
 	email: '',
 	password: '',
@@ -288,7 +298,7 @@ const loadAccounts = async () => {
 	const saved = localStorage.getItem('ipa_accounts')
 	if (saved) {
 		try {
-			accounts.value = JSON.parse(saved)
+			accounts.value = dedupeAccounts(JSON.parse(saved))
 		} catch {
 			accounts.value = []
 		}
@@ -301,13 +311,13 @@ const loadAccounts = async () => {
 
 		if (data.ok && data.data && data.data.length > 0) {
 			// 同步服务器账号列表到本地
-			accounts.value = data.data.map((acc) => ({
+			accounts.value = dedupeAccounts(data.data.map((acc) => ({
 				token: acc.token,
 				email: acc.email,
 				dsid: acc.dsid,
 				region: acc.region || 'US',
 				hasSavedCredentials: !!acc.hasSavedCredentials,
-			}))
+			})))
 			saveAccounts()
 		} else if (data.ok && (!data.data || data.data.length === 0)) {
 			// 服务端无已登录账号，尝试用保存的凭证自动恢复
@@ -318,13 +328,13 @@ const loadAccounts = async () => {
 					const retryRes = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
 					const retryData = await retryRes.json()
 					if (retryData.ok && retryData.data) {
-						accounts.value = retryData.data.map((acc) => ({
+						accounts.value = dedupeAccounts(retryData.data.map((acc) => ({
 							token: acc.token,
 							email: acc.email,
 							dsid: acc.dsid,
 							region: acc.region || 'US',
 							hasSavedCredentials: !!acc.hasSavedCredentials,
-						}))
+						})))
 						saveAccounts()
 					}
 				}
@@ -338,6 +348,7 @@ const loadAccounts = async () => {
 }
 
 const saveAccounts = () => {
+	accounts.value = dedupeAccounts(accounts.value)
 	localStorage.setItem('ipa_accounts', JSON.stringify(accounts.value))
 	emit('accounts-updated', accounts.value)
 }
@@ -417,13 +428,16 @@ const loginAccount = async () => {
 
 		// Login success
 		mfaRequired.value = false
-		accounts.value.push({
-			token: data.data.token,
-			email: data.data.email,
-			dsid: data.data.dsid,
-			region: data.data.region || 'US',
-			hasSavedCredentials: !!savePassword.value,
-		})
+		accounts.value = dedupeAccounts([
+			...accounts.value,
+			{
+				token: data.data.token,
+				email: data.data.email,
+				dsid: data.data.dsid,
+				region: data.data.region || 'US',
+				hasSavedCredentials: !!savePassword.value,
+			}
+		])
 
 		// 更新保存的凭证列表
 		await loadSavedCredentials()
@@ -478,6 +492,7 @@ const refreshAccount = async (index) => {
 	}
 
 	refreshingIndex.value = index
+	ElMessage.info(`检测到数据库已有账号，正在刷新 ${account.email} 的会话…`)
 
 	try {
 		const response = await fetch(`${API_BASE}/login/refresh`, {
@@ -492,10 +507,10 @@ const refreshAccount = async (index) => {
 		const data = await response.json()
 
 		if (data.ok) {
-			ElMessage.success('账号会话已刷新')
 			// 刷新账号列表以获取最新信息
 			await loadSavedCredentials()
 			await loadAccounts()
+			ElMessage.success('账号会话已刷新，页面状态已自动同步')
 		} else {
 			const errMsg = data.error || '刷新失败'
 			if (errMsg.includes('未找到保存的密码')) {
@@ -539,12 +554,14 @@ const autoLoginAll = async () => {
 						token: result.token,
 						email: result.email,
 						dsid: result.dsid,
+						region: result.region || 'US',
 						hasSavedCredentials: true,
 					})
 				}
 			})
 
 			saveAccounts()
+			await loadAccounts()
 
 			// 显示自动登录结果
 			if (success.length > 0 || needCode.length > 0 || failed.length > 0) {

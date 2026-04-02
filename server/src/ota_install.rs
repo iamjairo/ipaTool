@@ -17,34 +17,29 @@ pub fn generate_plist(
     bundle_version: String,
     title: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // 创建 plist 数据结构
-    let mut dict = Dictionary::new();
+    // iOS OTA manifest 需要标准结构：items -> [ { assets, metadata } ]
+    let mut root = Dictionary::new();
 
-    // 软件属性
-    let mut software_props = Dictionary::new();
-    software_props.insert("SoftwarePackageURL".into(), Value::String(url.clone()));
-    software_props.insert(
-        "SoftwareVersion".into(),
-        Value::String(bundle_version.clone()),
-    );
-    software_props.insert("URL".into(), Value::String(url));
+    let mut asset = Dictionary::new();
+    asset.insert("kind".into(), Value::String("software-package".into()));
+    asset.insert("url".into(), Value::String(url));
 
-    // 元数据
     let mut metadata = Dictionary::new();
     metadata.insert("bundle-identifier".into(), Value::String(bundle_identifier));
     metadata.insert("bundle-version".into(), Value::String(bundle_version));
-    metadata.insert("title".into(), Value::String(title));
     metadata.insert("kind".into(), Value::String("software".into()));
+    metadata.insert("title".into(), Value::String(title));
 
-    software_props.insert("metadata".into(), Value::Dictionary(metadata));
-
-    dict.insert(
-        "software-attributes".into(),
-        Value::Dictionary(software_props),
+    let mut item = Dictionary::new();
+    item.insert(
+        "assets".into(),
+        Value::Array(vec![Value::Dictionary(asset)]),
     );
+    item.insert("metadata".into(), Value::Dictionary(metadata));
 
-    // 生成 plist 字符串
-    let plist_value = Value::Dictionary(dict);
+    root.insert("items".into(), Value::Array(vec![Value::Dictionary(item)]));
+
+    let plist_value = Value::Dictionary(root);
     let mut plist_bytes = Vec::new();
     plist::to_writer_xml_with_options(&mut plist_bytes, &plist_value, &XmlWriteOptions::default())?;
     let plist_string = String::from_utf8(plist_bytes)?;
@@ -141,7 +136,8 @@ mod tests {
         assert!(result.is_ok());
 
         let plist = result.unwrap();
-        assert!(plist.contains("SoftwarePackageURL"));
+        assert!(plist.contains("<key>items</key>"));
+        assert!(plist.contains("software-package"));
         assert!(plist.contains("bundle-identifier"));
     }
 
