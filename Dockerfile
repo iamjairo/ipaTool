@@ -24,7 +24,7 @@ RUN pnpm run build && \
     echo "Frontend build completed successfully"
 
 # ── Stage 2: Rust backend ─────────────────────────────────────────────────────
-FROM rust:1.84-slim AS backend-builder
+FROM rust:1.86-slim AS backend-builder
 
 WORKDIR /app
 
