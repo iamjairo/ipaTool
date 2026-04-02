@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile
 # ── Stage 1: Frontend ─────────────────────────────────────────────────────────
-FROM node:18-alpine AS frontend-builder
+FROM node:20-alpine AS frontend-builder
 
 # Install pnpm (version must match the lockfile)
 RUN npm install -g pnpm@10
