@@ -13,10 +13,10 @@
         </div>
         <div>
           <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-            账号安全
+            Account Security
           </h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            修改管理员登录凭据
+            Change Admin Login Credentials
           </p>
         </div>
       </div>
@@ -30,10 +30,10 @@
             </div>
             <div>
               <p class="text-sm font-medium text-gray-900 dark:text-white">
-                {{ appStore.authState.user?.username || '未知' }}
+                {{ appStore.authState.user?.username || 'Unknown' }}
               </p>
               <p class="text-xs text-gray-500 dark:text-gray-400">
-                管理员账号
+                Admin Account
               </p>
             </div>
           </div>
@@ -41,14 +41,14 @@
             size="small"
             @click="showChangeDialog = true"
           >
-            修改账号
+            Edit Account
           </el-button>
         </div>
       </div>
 
       <el-dialog
         v-model="showChangeDialog"
-        title="修改登录凭据"
+        title="Change Login Credentials"
         width="420px"
         :close-on-click-modal="false"
         align-center
@@ -60,7 +60,7 @@
           label-position="top"
         >
           <el-form-item
-            label="当前密码"
+            label="Current Password"
             prop="current_password"
           >
             <el-input
@@ -68,21 +68,21 @@
               type="password"
               show-password
               autocomplete="current-password"
-              placeholder="请输入当前密码"
+              placeholder="Please enter current password"
             />
           </el-form-item>
           <el-form-item
-            label="新用户名（留空则不修改）"
+            label="New Username (leave blank to keep current)"
             prop="new_username"
           >
             <el-input
               v-model="credForm.new_username"
               autocomplete="off"
-              placeholder="输入新用户名或留空"
+              placeholder="Enter new username or leave blank"
             />
           </el-form-item>
           <el-form-item
-            label="新密码"
+            label="New Password"
             prop="new_password"
           >
             <el-input
@@ -90,11 +90,11 @@
               type="password"
               show-password
               autocomplete="new-password"
-              placeholder="请输入新密码"
+              placeholder="Please enter new password"
             />
           </el-form-item>
           <el-form-item
-            label="确认新密码"
+            label="Confirm New Password"
             prop="confirm_password"
           >
             <el-input
@@ -102,21 +102,21 @@
               type="password"
               show-password
               autocomplete="new-password"
-              placeholder="请再次输入新密码"
+              placeholder="Please confirm new password"
             />
           </el-form-item>
         </el-form>
 
         <template #footer>
           <el-button @click="showChangeDialog = false">
-            取消
+            Cancel
           </el-button>
           <el-button
             type="primary"
             :loading="credLoading"
             @click="handleChangeCredentials"
           >
-            确认修改
+            Confirm Changes
           </el-button>
         </template>
       </el-dialog>
@@ -132,10 +132,10 @@
         </div>
         <div>
           <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-            通知管理
+            Notification Settings
           </h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            自定义浏览器通知行为
+            Configure browser notification behavior
           </p>
         </div>
       </div>
@@ -148,10 +148,10 @@
         <div class="flex items-center justify-between">
           <div>
             <p class="text-sm font-medium text-yellow-800 dark:text-yellow-300">
-              浏览器通知未授权
+              Browser notifications not authorized
             </p>
             <p class="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
-              需要授权后才能接收通知
+              Authorization required to receive notifications
             </p>
           </div>
           <el-button
@@ -159,7 +159,7 @@
             size="small"
             @click="handleRequestPermission"
           >
-            开启权限
+            Enable Permission
           </el-button>
         </div>
       </div>
@@ -168,7 +168,7 @@
         class="mb-5 p-3 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl"
       >
         <p class="text-sm text-green-700 dark:text-green-300">
-          ✅ 浏览器通知已授权
+          ✅ Browser notifications authorized
         </p>
       </div>
 
@@ -177,10 +177,10 @@
         <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
           <div>
             <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              新版本检测
+              New Version Detection
             </p>
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              订阅应用有更新时通知
+              Notify when subscribed apps have updates
             </p>
           </div>
           <el-switch
@@ -191,10 +191,10 @@
         <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
           <div>
             <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              下载完成
+              Download Complete
             </p>
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              IPA 下载成功时通知
+              Notify when IPA download succeeds
             </p>
           </div>
           <el-switch
@@ -205,10 +205,10 @@
         <div class="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
           <div>
             <p class="text-sm font-medium text-gray-700 dark:text-gray-300">
-              下载失败
+              Download Failed
             </p>
             <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-              IPA 下载出错时通知
+              Notify when IPA download fails
             </p>
           </div>
           <el-switch
@@ -227,17 +227,17 @@
         </div>
         <div>
           <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-            版本信息
+            Version Info
           </h3>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            当前前端构建版本
+            Current frontend build version
           </p>
         </div>
       </div>
 
       <div class="p-4 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
         <p class="text-sm text-gray-500 dark:text-gray-400">
-          版本号
+          Version Number
         </p>
         <p class="mt-1 font-mono text-base text-gray-900 dark:text-white">
           v{{ appVersion }} · build {{ buildId }}
@@ -265,9 +265,9 @@ const buildId = __APP_BUILD_ID__
 async function handleRequestPermission() {
   const result = await notifications.requestPermission()
   if (result === 'granted') {
-    ElMessage.success('通知权限已开启')
+    ElMessage.success('Notification permission granted')
   } else {
-    ElMessage.warning('通知权限被拒绝，可在浏览器设置中手动开启')
+    ElMessage.warning('Notification permission denied, you can enable it in browser settings')
   }
 }
 
@@ -291,14 +291,14 @@ const credForm = reactive({
 })
 
 const credRules = {
-  current_password: [{ required: true, message: '请输入当前密码', trigger: 'blur' }],
-  new_password: [{ required: true, message: '请输入新密码', trigger: 'blur' }],
+  current_password: [{ required: true, message: 'Please enter current password', trigger: 'blur' }],
+  new_password: [{ required: true, message: 'Please enter new password', trigger: 'blur' }],
   confirm_password: [
-    { required: true, message: '请确认新密码', trigger: 'blur' },
+    { required: true, message: 'Please confirm new password', trigger: 'blur' },
     {
       validator: (_, value, callback) => {
         if (value !== credForm.new_password) {
-          callback(new Error('两次输入的密码不一致'))
+          callback(new Error('Passwords do not match'))
         } else {
           callback()
         }
@@ -329,7 +329,7 @@ async function handleChangeCredentials() {
     })
 
     if (!res.ok) {
-      let msg = '修改失败'
+      let msg = 'Change failed'
       try { const j = await res.json(); msg = j?.error || msg } catch {}
       throw new Error(msg)
     }
@@ -344,10 +344,10 @@ async function handleChangeCredentials() {
     credForm.new_password = ''
     credForm.confirm_password = ''
 
-    ElMessage.success('登录凭据已修改，请重新登录')
+    ElMessage.success('Login credentials updated, please log in again')
     emit('logout')
   } catch (e) {
-    ElMessage.error(e?.message || '修改失败')
+    ElMessage.error(e?.message || 'Change failed')
   } finally {
     credLoading.value = false
   }

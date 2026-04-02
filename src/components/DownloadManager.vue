@@ -18,17 +18,17 @@
       </div>
       <div>
         <h2 class="text-xl font-bold text-gray-900 dark:text-white">
-          下载与签名
+          Download & Sign
         </h2>
         <p class="text-sm text-gray-500 dark:text-gray-400">
-          搜索应用、查询版本并下载IPA文件
+          Search apps, look up versions, and download IPA files
         </p>
       </div>
     </div>
 
     <!-- Search Section -->
     <div class="space-y-4 mb-6">
-      <!-- 账号选择提示 -->
+      <!-- Account selection notice -->
       <div
         v-if="accounts.length === 0"
         class="bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-xl p-4"
@@ -49,10 +49,10 @@
           </svg>
           <div class="flex-1">
             <h4 class="font-semibold text-orange-900 dark:text-orange-300">
-              需要先登录账号
+              Account Login Required
             </h4>
             <p class="text-sm text-orange-700 dark:text-orange-400 mt-1">
-              请先在"账号"标签页登录 Apple ID 账号，然后才能搜索应用。
+              Please log in with an Apple ID in the "Accounts" tab before searching for apps.
             </p>
             <el-button 
               type="warning" 
@@ -61,13 +61,13 @@
               plain
               @click="goToAccountTab"
             >
-              前往登录
+              Go to Login
             </el-button>
           </div>
         </div>
       </div>
 
-      <!-- 账号选择区域 -->
+      <!-- Account selection area -->
       <div
         v-else
         class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4"
@@ -88,12 +88,12 @@
               />
             </svg>
             <span class="text-sm text-blue-700 dark:text-blue-400">
-              搜索区域: <strong>{{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}</strong>
+              Search Region: <strong>{{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}</strong>
             </span>
           </div>
           <el-select 
             v-model="selectedAccount"
-            placeholder="选择账号"
+            placeholder="Select Account"
             class="account-quick-select"
             size="small"
             @change="handleAccountChange"
@@ -127,7 +127,7 @@
             value="search"
             class="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
           >
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">搜索应用</span>
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Search Apps</span>
         </label>
         <label class="flex items-center space-x-2 cursor-pointer">
           <input
@@ -136,13 +136,13 @@
             value="appid"
             class="w-4 h-4 text-primary-600 focus:ring-primary-500 border-gray-300"
           >
-          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">直接输入 App ID</span>
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-300">Enter App ID Directly</span>
         </label>
       </div>
 
       <el-input
         v-model="searchQuery"
-        :placeholder="searchMode === 'search' ? '搜索应用名称、Bundle ID 或 App ID...' : '输入 App ID（纯数字）...'"
+        :placeholder="searchMode === 'search' ? 'Search app name, Bundle ID or App ID...' : 'Enter App ID (numbers only)...'"
         :prefix-icon="Search"
         :loading="searching"
         :disabled="accounts.length === 0"
@@ -163,7 +163,7 @@
             App ID: <span class="font-bold">{{ searchQuery.trim() }}</span>
           </p>
           <p class="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
-            即使未找到应用信息，也可以继续查询版本号
+            You can continue to look up version info even if the app is not found
           </p>
         </div>
         <el-button
@@ -171,7 +171,7 @@
           size="default"
           @click="confirmDirectAppId"
         >
-          确认并继续
+          Confirm & Continue
         </el-button>
       </div>
 
@@ -247,18 +247,18 @@
               {{ selectedApp.artistName }}
             </p>
             <p class="text-xs text-gray-500 dark:text-gray-500 mt-1">
-              版本: {{ selectedApp.version }} | ID: {{ selectedApp.trackId }}
+              Version: {{ selectedApp.version }} | ID: {{ selectedApp.trackId }}
               <span
                 v-if="selectedApp.isDirectAppId"
                 class="ml-2 px-2 py-0.5 bg-yellow-200 dark:bg-yellow-800 text-yellow-800 dark:text-yellow-200 rounded-full text-xs"
               >
-                直接输入
+                Direct Input
               </span>
             </p>
             <div class="selected-app-badges mt-2">
-              <span class="selected-app-badge">价格：{{ getSelectedAppPriceLabel() }}</span>
-              <span class="selected-app-badge">大小：{{ getSelectedAppSizeLabel() }}</span>
-              <span class="selected-app-badge">购买状态：{{ getPurchaseBehaviorLabel() }}</span>
+              <span class="selected-app-badge">Price: {{ getSelectedAppPriceLabel() }}</span>
+              <span class="selected-app-badge">Size: {{ getSelectedAppSizeLabel() }}</span>
+              <span class="selected-app-badge">Purchase Status: {{ getPurchaseBehaviorLabel() }}</span>
             </div>
           </div>
         </div>
@@ -268,17 +268,17 @@
       <div class="space-y-3">
         <div>
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-            选择账号
+            Select Account
             <span
               v-if="selectedAccount !== null && selectedAccount !== undefined && selectedAccount !== ''"
               class="ml-2 text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded-full"
             >
-              商店区域: {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}
+              Store Region: {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }}
             </span>
           </label>
           <el-select 
             v-model="selectedAccount"
-            placeholder="请先登录账号"
+            placeholder="Please sign in first"
             class="w-full form-select"
             :disabled="accounts.length === 0"
             @change="handleAccountChange"
@@ -304,13 +304,13 @@
             v-if="accounts.length === 0"
             class="text-xs text-orange-600 dark:text-orange-400 mt-1"
           >
-            ⚠️ 请先登录账号
+            ⚠️ Please sign in first
           </p>
           <p
             v-else
             class="text-xs text-gray-500 dark:text-gray-400 mt-1"
           >
-            ✅ 搜索和下载将使用此账号的 {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }} 商店
+            ✅ Search and download will use the {{ getRegionLabel(accounts[selectedAccount]?.region || 'US') }} store for this account
           </p>
         </div>
 
@@ -318,16 +318,16 @@
           <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">APPID</label>
           <el-input
             v-model="appid"
-            placeholder="例如：1160172628"
+            placeholder="e.g., 1160172628"
             class="form-input"
           />
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">版本（历史版本下拉）</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Version (history dropdown)</label>
           <el-select 
             v-model="selectedVersion"
-            placeholder="请先查询版本"
+            placeholder="Look up versions first"
             class="w-full form-select"
             :disabled="!versionsFetched"
             :loading="fetchingVersions"
@@ -343,7 +343,7 @@
         </div>
 
         <div>
-          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">appVerId（自动填充）</label>
+          <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">appVerId (auto-filled)</label>
           <el-input
             v-model="appVerId"
             placeholder="external_identifier"
@@ -368,7 +368,7 @@
             <template #icon>
               <el-icon><Search /></el-icon>
             </template>
-            查询版本
+            Look Up Versions
           </el-button>
 
           <el-button
@@ -383,7 +383,7 @@
             <template #icon>
               <el-icon><Download /></el-icon>
             </template>
-            直链下载（仅下载文件）
+            Direct Link Download (file only)
           </el-button>
 
           <el-button
@@ -399,7 +399,7 @@
             <template #icon>
               <el-icon><Download /></el-icon>
             </template>
-            {{ downloading ? '处理中...' : '下载到服务器' }}
+            {{ downloading ? 'Processing...' : 'Download to Server' }}
           </el-button>
 
           <div v-if="purchaseRequired" class="download-disabled-hint">
@@ -466,10 +466,10 @@
               </svg>
               <div class="flex-1">
                 <p class="text-sm text-yellow-800 dark:text-yellow-300 font-medium">
-                  环境检测
+                  Environment Check
                 </p>
                 <p class="text-xs text-yellow-700 dark:text-yellow-400 mt-1">
-                  当前协议: {{ currentProtocol || '未知' }} | iOS 安装需要 HTTPS 环境
+                  Current protocol: {{ currentProtocol || 'Unknown' }} | iOS installation requires HTTPS
                 </p>
               </div>
             </div>
@@ -486,7 +486,7 @@
               <template #icon>
                 <el-icon><Download /></el-icon>
               </template>
-              下载 IPA{{ downloadReadyFileSize ? `（${formatFileSize(downloadReadyFileSize)}）` : '' }}
+              Download IPA{{ downloadReadyFileSize ? ` (${formatFileSize(downloadReadyFileSize)})` : '' }}
             </el-button>
             <a
               v-if="downloadOtaInstallable && downloadInstallUrl && isHttps"
@@ -501,7 +501,7 @@
                 <template #icon>
                   <el-icon><Download /></el-icon>
                 </template>
-                安装到设备
+                Install to Device
               </el-button>
             </a>
             <el-button
@@ -514,23 +514,23 @@
               <template #icon>
                 <el-icon><Download /></el-icon>
               </template>
-              安装到设备
+              Install to Device
             </el-button>
             <el-tooltip v-else-if="downloadInstallMethod === 'download_only' && downloadInspection && downloadInspection.summary" :content="downloadInspection.summary" placement="top">
               <span class="block w-full">
-                <el-tag size="large" type="info" class="w-full text-center">仅下载</el-tag>
+                <el-tag size="large" type="info" class="w-full text-center">Download Only</el-tag>
               </span>
             </el-tooltip>
-            <el-tag v-else-if="downloadInstallMethod === 'download_only'" size="large" type="info" class="w-full text-center">仅下载</el-tag>
+            <el-tag v-else-if="downloadInstallMethod === 'download_only'" size="large" type="info" class="w-full text-center">Download Only</el-tag>
           </div>
           <p class="text-xs text-gray-500 dark:text-gray-400 text-center">
-            下载和安装已分离，请按需手动操作
+            Download and installation are separate. Please proceed manually as needed.
           </p>
           <p
             v-if="downloadInstallUrl && !isHttps"
             class="text-xs text-orange-600 dark:text-orange-400 mt-1 text-center"
           >
-            ⚠️ 按 OpenList / Oplist 方案，OTA 安装必须满足 HTTPS + 有效证书 + 已签名 IPA；若在 Telegram 内置浏览器中打开，也请改用 Safari
+            ⚠️ Per the OpenList/Oplist approach, OTA installation requires HTTPS + valid certificate + signed IPA. If opened in Telegram's built-in browser, please use Safari instead.
           </p>
         </div>
       </el-card>
@@ -555,10 +555,10 @@
         />
       </svg>
       <p class="text-lg font-medium">
-        未选择应用
+        No App Selected
       </p>
       <p class="text-sm mt-2">
-        请先在上方搜索并选择一个应用
+        Search for and select an app above to get started
       </p>
     </div>
   </div>
@@ -591,7 +591,7 @@ const selectedApp = computed(() => props.selectedApp)
 
 const emit = defineEmits(['download-started', 'app-selected'])
 
-// 获取区域标签
+// Get region label
 const getRegionLabel = (region) => {
   const regionMap = {
     'US': '🇺🇸 US',
@@ -606,27 +606,27 @@ const getRegionLabel = (region) => {
   return regionMap[region] || region
 }
 
-// 处理账号选择变化
+// Handle account selection change
 const handleAccountChange = () => {
   const account = accounts.value[selectedAccount.value]
   if (account) {
     console.log(`[DownloadManager] Selected account: ${account.email}, Region: ${account.region || 'US'}`)
   }
   
-  // 清空之前查询的版本信息
+  // Clear previously fetched version info
   versions.value = []
   selectedVersion.value = ''
   appVerId.value = ''
   versionsFetched.value = false
   
-  // 同步状态到store
+  // Sync state to store
   syncStateToStore()
 }
 
-// 自动选择第一个账号
+// Auto-select first account
 const autoSelectFirstAccount = () => {
   if (accounts.value.length > 0 && (selectedAccount.value === null || selectedAccount.value === undefined || selectedAccount.value === '')) {
-    // 尝试从 localStorage 恢复上次选择的账号
+    // Try to restore previously selected account from localStorage
     const savedAccountIndex = localStorage.getItem('ipa_selected_account_index')
     if (savedAccountIndex !== null && savedAccountIndex !== '' && !isNaN(parseInt(savedAccountIndex)) && parseInt(savedAccountIndex) < accounts.value.length) {
       selectedAccount.value = parseInt(savedAccountIndex)
@@ -639,9 +639,9 @@ const autoSelectFirstAccount = () => {
 }
 
 const accounts = ref([])
-const selectedAccount = ref(null)  // 改为 null 而不是空字符串
+const selectedAccount = ref(null)  // Use null instead of empty string
 
-// 监听账号选择变化，保存到 localStorage
+// Watch account selection and save to localStorage
 watch(selectedAccount, (newValue) => {
   if (newValue !== null && newValue !== undefined && newValue !== '') {
     localStorage.setItem('ipa_selected_account_index', String(newValue))
@@ -656,13 +656,13 @@ const versionsFetched = ref(false)
 const fetchingVersions = ref(false)
 const downloading = ref(false)
 const checkingPurchaseStatus = ref(false)
-const purchaseStatusText = ref('待检测')
+const purchaseStatusText = ref('Pending')
 const purchaseStatus = ref({ purchased: null, needsPurchase: false, status: 'unknown', error: null })
 
 // Progress state - sync with store
 const showProgress = ref(false)
 const progressPercent = ref(0)
-const progressStage = ref('等待任务…')
+const progressStage = ref('Waiting for task…')
 const logs = ref('')
 
 // Search state
@@ -701,16 +701,16 @@ const claimRequired = computed(() => {
 const paidPurchaseRequired = computed(() => purchaseRequired.value && !claimRequired.value)
 const downloadBlocked = computed(() => checkingPurchaseStatus.value || purchaseRequired.value)
 const downloadBlockedReason = computed(() => {
-  if (checkingPurchaseStatus.value) return '正在检测购买状态…'
+  if (checkingPurchaseStatus.value) return 'Checking purchase status…'
   if (!purchaseRequired.value) return ''
   const price = getSelectedAppPrice()
-  if (price !== null && price > 0) return '当前账号未购买：请先在 App Store 购买后再下载'
-  return '当前账号未领取：请先在官方 App Store 点击“获取”后再下载'
+  if (price !== null && price > 0) return 'Not purchased: please purchase in the App Store first'
+  return 'Not claimed: please tap "Get" in the official App Store first'
 })
 const purchaseActionLabel = computed(() => {
   const price = getSelectedAppPrice()
-  if (price !== null && price > 0) return '去购买'
-  return '去 App Store 获取'
+  if (price !== null && price > 0) return 'Go to Purchase'
+  return 'Get on App Store'
 })
 
 // HTTPS detection
@@ -733,7 +733,7 @@ const syncStateToStore = () => {
 
 const restoreStateFromStore = () => {
   const state = appStore.downloadState
-  // 只恢复非 undefined 的值，避免覆盖自动选择的账号
+  // Only restore non-undefined values to avoid overwriting auto-selected account
   if (state.selectedAccountIndex !== undefined && state.selectedAccountIndex !== null && state.selectedAccountIndex !== '') {
     selectedAccount.value = state.selectedAccountIndex
   }
@@ -753,7 +753,7 @@ watch([selectedAccount, appid, appVerId, versions, selectedVersion, versionsFetc
   syncStateToStore()
 }, { deep: true })
 
-// 监听账号列表变化，自动选择账号
+// Watch account list and auto-select account
 watch(accounts, () => {
   autoSelectFirstAccount()
 }, { deep: true })
@@ -770,7 +770,7 @@ const loadAccounts = async () => {
     }
   }
   
-  // 从服务器获取最新的账号列表
+  // Fetch latest account list from server
   try {
     const response = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
     const data = await response.json()
@@ -783,18 +783,18 @@ const loadAccounts = async () => {
         region: acc.region || 'US',
         hasSavedCredentials: !!acc.hasSavedCredentials,
       })))
-      // 更新本地存储
+      // Update local storage
       localStorage.setItem('ipa_accounts', JSON.stringify(accounts.value))
       
-      // 自动选择第一个账号
+      // Auto-select first account
       autoSelectFirstAccount()
     } else if (data.ok && (!data.data || data.data.length === 0)) {
-      // 服务端无已登录账号，尝试用保存的凭证自动恢复
+      // No accounts on server, try auto-restore with saved credentials
       try {
         const autoRes = await fetch(`${API_BASE}/auto-login`, { method: 'POST', credentials: 'include' })
         const autoData = await autoRes.json()
         if (autoData.ok && autoData.data?.succeeded?.length > 0) {
-          // 自动登录成功，重新加载账号列表
+          // Auto-login succeeded, reload account list
           const retryRes = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
           const retryData = await retryRes.json()
           if (retryData.ok && retryData.data) {
@@ -820,12 +820,12 @@ const loadAccounts = async () => {
 
 const resolveActiveAccount = async () => {
   if (!selectedAccount.value && selectedAccount.value !== 0) {
-    throw new Error('请选择登录账号')
+    throw new Error('Please select an account')
   }
 
   const currentAccount = accounts.value[selectedAccount.value]
   if (!currentAccount) {
-    throw new Error('当前账号不存在，请重新选择账号')
+    throw new Error('Account not found, please re-select an account')
   }
 
   const targetEmail = currentAccount.email
@@ -836,7 +836,7 @@ const resolveActiveAccount = async () => {
   )
 
   if (freshIndex < 0) {
-    throw new Error('当前账号会话已失效，请到账号管理页重新登录')
+    throw new Error('Account session has expired, please sign in again in the Account settings')
   }
 
   selectedAccount.value = freshIndex
@@ -848,13 +848,13 @@ const addLog = (message) => {
   logs.value += `[${timestamp}] ${message}\n`
 }
 
-// 跳转到账号标签页
+// Navigate to account tab
 const goToAccountTab = () => {
   const appStore = useAppStore()
   appStore.activeTab = 'settings'
 }
 
-// Search functionality - 使用所选账号的区域
+// Search functionality - uses the region of the selected account
 const handleSearch = useDebounceFn(async () => {
   const query = searchQuery.value.trim()
   if (!query) {
@@ -867,7 +867,7 @@ const handleSearch = useDebounceFn(async () => {
     return
   }
 
-  // 检查是否已选择账号
+  // Check if an account is selected
   if (accounts.value.length === 0 || selectedAccount.value === '' || selectedAccount.value === null) {
     searchResults.value = []
     return
@@ -875,7 +875,7 @@ const handleSearch = useDebounceFn(async () => {
 
   searching.value = true
   try {
-    // 获取当前选择账号的区域
+    // Get region of the currently selected account
     const account = accounts.value[selectedAccount.value]
     const region = account?.region || 'US'
     
@@ -922,11 +922,11 @@ const confirmDirectAppId = () => {
     const minimalApp = {
       trackId: appId,
       trackName: `App ID: ${appId}`,
-      artistName: '未知开发者',
+      artistName: 'Unknown Developer',
       bundleId: 'unknown.bundle',
       artworkUrl60: null,
       artworkUrl100: null,
-      version: '未知',
+      version: 'Unknown',
       isDirectAppId: true // Flag to indicate this is a direct App ID input
     }
     emit('app-selected', minimalApp)
@@ -956,7 +956,7 @@ watch(accounts, () => {
 // Watch for account and appid changes to auto-fetch versions
 watch([selectedAccount, appid], ([newAccount, newAppid]) => {
   if (newAccount !== '' && newAccount !== null && newAppid) {
-    // 自动查询版本
+    // Auto-fetch versions
     fetchVersions()
   }
 })
@@ -965,11 +965,11 @@ watch(
   [() => props.selectedApp?.trackId, selectedAccount],
   async ([trackId, accountIndex]) => {
     if (!trackId) {
-      purchaseStatusText.value = '待检测'
+      purchaseStatusText.value = 'Pending'
       return
     }
     if (accountIndex === '' || accountIndex === null || accountIndex === undefined) {
-      purchaseStatusText.value = '请选择账号后检测'
+      purchaseStatusText.value = 'Select an account to check'
       return
     }
     await refreshSelectedAppMetadata()
@@ -980,12 +980,12 @@ watch(
 
 const fetchVersions = async () => {
   if (!appid.value) {
-    ElMessage.warning('请填写 APPID')
+    ElMessage.warning('Please enter an App ID')
     return
   }
 
   if (selectedAccount.value === '' || selectedAccount.value === null) {
-    ElMessage.warning('请先选择账号')
+    ElMessage.warning('Please select an account first')
     return
   }
 
@@ -993,24 +993,24 @@ const fetchVersions = async () => {
   const region = account?.region || 'US'
 
   fetchingVersions.value = true
-  addLog(`[查询] 正在查询 APPID=${appid.value} 的历史版本（区域：${getRegionLabel(region)}）...`)
+  addLog(`[Lookup] Fetching version history for App ID=${appid.value} (region: ${getRegionLabel(region)})...`)
 
   try {
     const response = await fetch(`${API_BASE}/versions?appid=${encodeURIComponent(appid.value)}&region=${encodeURIComponent(region)}`, { credentials: 'include' })
     const data = await response.json()
 
     if (!data.ok) {
-      ElMessage.error(`查询失败：${data.error || '未知错误'}`)
-      addLog(`[查询] 失败：${data.error || '未知错误'}`)
+      ElMessage.error(`Lookup failed: ${data.error || 'Unknown error'}`)
+      addLog(`[Lookup] Failed: ${data.error || 'Unknown error'}`)
       return
     }
 
     versions.value = [...(data.data || [])].sort(compareVersionDesc)
     versionsFetched.value = true
-    addLog(`[查询] 获取到 ${versions.value.length} 条版本记录`)
+    addLog(`[Lookup] Retrieved ${versions.value.length} version record(s)`)
   } catch (error) {
-    ElMessage.error(`查询失败：${error.message}`)
-    addLog(`[查询] 失败：${error.message}`)
+    ElMessage.error(`Lookup failed: ${error.message}`)
+    addLog(`[Lookup] Failed: ${error.message}`)
   } finally {
     fetchingVersions.value = false
   }
@@ -1029,19 +1029,19 @@ const getSelectedAppPriceLabel = () => {
   const formatted = props.selectedApp?.formattedPrice
   if (formatted && formatted !== '0' && formatted !== '0.00') return formatted
   const price = getSelectedAppPrice()
-  if (price === null) return '未知'
-  if (price <= 0) return '免费'
+  if (price === null) return 'Unknown'
+  if (price <= 0) return 'Free'
   return `${price}`
 }
 
 const getSelectedAppSizeLabel = () => {
   const size = Number(props.selectedApp?.fileSizeBytes)
-  if (!Number.isFinite(size) || size <= 0) return '未知'
+  if (!Number.isFinite(size) || size <= 0) return 'Unknown'
   return `${(size / 1024 / 1024).toFixed(size / 1024 / 1024 >= 100 ? 0 : 1)} M`
 }
 
 const getPurchaseBehaviorLabel = () => {
-  if (checkingPurchaseStatus.value) return '检测中...'
+  if (checkingPurchaseStatus.value) return 'Checking...'
   return purchaseStatusText.value
 }
 
@@ -1096,18 +1096,18 @@ const refreshSelectedAppMetadata = async () => {
 
 const refreshPurchaseStatus = async () => {
   if (!props.selectedApp?.trackId) {
-    purchaseStatusText.value = '待检测'
+    purchaseStatusText.value = 'Pending'
     return
   }
 
   if (selectedAccount.value === null || selectedAccount.value === undefined || selectedAccount.value === '') {
-    purchaseStatusText.value = '请选择账号后检测'
+    purchaseStatusText.value = 'Select an account to check'
     return
   }
 
   const account = accounts.value[selectedAccount.value]
   if (!account?.token) {
-    purchaseStatusText.value = '账号无效'
+    purchaseStatusText.value = 'Invalid account'
     return
   }
 
@@ -1119,7 +1119,7 @@ const refreshPurchaseStatus = async () => {
     const data = await response.json()
     const payload = data?.data || {}
 
-    if (!data.ok) throw new Error(data.error || '检测失败')
+    if (!data.ok) throw new Error(data.error || 'Check failed')
 
     purchaseStatus.value = {
       purchased: !!payload.purchased,
@@ -1130,14 +1130,14 @@ const refreshPurchaseStatus = async () => {
 
     const price = getSelectedAppPrice()
     if (payload.purchased) {
-      purchaseStatusText.value = price !== null && price > 0 ? '当前账号已购买' : '当前账号已领取'
+      purchaseStatusText.value = price !== null && price > 0 ? 'Purchased' : 'Claimed'
     } else if (payload.needsPurchase) {
-      purchaseStatusText.value = price !== null && price > 0 ? '当前账号未购买' : '当前账号未领取'
+      purchaseStatusText.value = price !== null && price > 0 ? 'Not purchased' : 'Not claimed'
     } else {
-      purchaseStatusText.value = payload.error ? `检测失败：${payload.error}` : '状态未知'
+      purchaseStatusText.value = payload.error ? `Check failed: ${payload.error}` : 'Unknown status'
     }
   } catch (error) {
-    purchaseStatusText.value = `检测失败`
+    purchaseStatusText.value = 'Check failed'
     console.warn('Failed to refresh purchase status:', error)
   } finally {
     checkingPurchaseStatus.value = false
@@ -1156,7 +1156,7 @@ const preflightPurchaseGate = async (account, modeLabel, retryFn) => {
     const payload = data?.data || {}
 
     if (!data.ok) {
-      throw new Error(data.error || '检测购买状态失败')
+      throw new Error(data.error || 'Failed to check purchase status')
     }
 
     const price = getSelectedAppPrice()
@@ -1168,33 +1168,33 @@ const preflightPurchaseGate = async (account, modeLabel, retryFn) => {
     }
 
     if (payload.purchased) {
-      purchaseStatusText.value = price !== null && price > 0 ? '当前账号已购买' : '当前账号已领取'
+      purchaseStatusText.value = price !== null && price > 0 ? 'Purchased' : 'Claimed'
       return true
     }
 
     if (payload.needsPurchase) {
-      purchaseStatusText.value = price !== null && price > 0 ? '当前账号未购买' : '当前账号未领取'
-      ElMessage.warning(downloadBlockedReason.value || '当前账号未购买/未领取')
+      purchaseStatusText.value = price !== null && price > 0 ? 'Not purchased' : 'Not claimed'
+      ElMessage.warning(downloadBlockedReason.value || 'Not purchased/claimed by current account')
       return false
     }
 
-    purchaseStatusText.value = payload.error ? `检测失败：${payload.error}` : '状态未知'
+    purchaseStatusText.value = payload.error ? `Check failed: ${payload.error}` : 'Unknown status'
     await ElMessageBox.alert(
-      `下载前购买状态校验失败：${payload.error || '状态未知'}。为避免错误下载，已中止。`,
-      '无法开始下载',
+      `Pre-download purchase check failed: ${payload.error || 'Unknown status'}. Download aborted to prevent errors.`,
+      'Cannot Start Download',
       {
-        confirmButtonText: '知道了',
+        confirmButtonText: 'OK',
         type: 'warning'
       }
     )
     return false
   } catch (error) {
-    purchaseStatusText.value = '检测失败'
+    purchaseStatusText.value = 'Check failed'
     await ElMessageBox.alert(
-      `下载前购买状态校验失败：${error.message || error}`,
-      '无法开始下载',
+      `Pre-download purchase check failed: ${error.message || error}`,
+      'Cannot Start Download',
       {
-        confirmButtonText: '知道了',
+        confirmButtonText: 'OK',
         type: 'warning'
       }
     )
@@ -1210,28 +1210,28 @@ const buyOrClaimSelectedApp = async () => {
     const price = getSelectedAppPrice()
 
     if (price === null) {
-      await ElMessageBox.alert('价格未知，无法安全领取/购买。请先在搜索结果确认价格信息。', '无法领取', {
-        confirmButtonText: '知道了',
+      await ElMessageBox.alert('Price is unknown, cannot safely claim/purchase. Please confirm the price in search results first.', 'Cannot Claim', {
+        confirmButtonText: 'OK',
         type: 'warning'
       })
       return
     }
 
     if (price > 0) {
-      await ElMessageBox.alert('这是付费应用，请先在 App Store 购买。购买完成后页面会自动恢复下载按钮。', '需要先购买', {
-        confirmButtonText: '知道了',
+      await ElMessageBox.alert('This is a paid app. Please purchase it in the App Store first. The download button will be available after purchase.', 'Purchase Required', {
+        confirmButtonText: 'OK',
         type: 'warning'
       })
       return
     }
 
-    const appName = props.selectedApp?.trackName || appid.value || '当前应用'
+    const appName = props.selectedApp?.trackName || appid.value || 'Current App'
     const appStoreUrl = props.selectedApp?.trackViewUrl || `https://apps.apple.com/app/id${props.selectedApp.trackId}`
     await ElMessageBox.alert(
-      `免费应用「${appName}」请先在官方 App Store 点击“获取”。完成后回到此页面刷新状态，再选择“直链下载”或“下载到服务器”。`,
-      '请先到 App Store 获取',
+      `Free app "${appName}": Please tap "Get" in the App Store first. Come back here to refresh status, then choose "Direct Link Download" or "Download to Server".`,
+      'Get App from App Store First',
       {
-        confirmButtonText: '打开 App Store',
+        confirmButtonText: 'Open App Store',
         type: 'info'
       }
     ).catch(() => {})
@@ -1239,77 +1239,77 @@ const buyOrClaimSelectedApp = async () => {
     window.open(appStoreUrl, '_blank', 'noopener')
     await refreshPurchaseStatus()
   } catch (error) {
-    ElMessage.warning(error.message || '领取失败')
+    ElMessage.warning(error.message || 'Claim failed')
   }
 }
 
 const handleNeedsPurchase = async (retryFn, modeLabel, account = null) => {
   const price = getSelectedAppPrice()
-  const appName = props.selectedApp?.trackName || appid.value || '当前应用'
-  const accountEmail = account?.email || accounts.value[selectedAccount.value]?.email || '未知账号'
+  const appName = props.selectedApp?.trackName || appid.value || 'Current App'
+  const accountEmail = account?.email || accounts.value[selectedAccount.value]?.email || 'Unknown Account'
   const accountRegion = getRegionLabel(account?.region || accounts.value[selectedAccount.value]?.region || 'US')
 
   if (price === null) {
     await ElMessageBox.alert(
-      `应用：${appName}\n价格：未知\n账号：${accountEmail}\n区域：${accountRegion}\n\n当前无法确认该应用是否免费。为避免误触发付费购买，请先在搜索结果中确认价格；若为付费应用，请先在 App Store 完成购买。`,
-      '无法自动购买',
+      `App: ${appName}\nPrice: Unknown\nAccount: ${accountEmail}\nRegion: ${accountRegion}\n\nUnable to confirm if this app is free. To avoid accidental paid purchases, please check the price in search results first; if it is a paid app, complete the purchase in the App Store.`,
+      'Cannot Auto-Purchase',
       {
-        confirmButtonText: '知道了',
+        confirmButtonText: 'OK',
         type: 'warning'
       }
     )
-    addLog(`[${modeLabel}] 未购买，但价格未知，已阻止自动购买`)
+    addLog(`[${modeLabel}] Not purchased, price unknown, blocked auto-purchase`)
     return
   }
 
   if (price > 0) {
     await ElMessageBox.alert(
-      `应用：${appName}\n价格：${getSelectedAppPriceLabel()}\n账号：${accountEmail}\n区域：${accountRegion}\n\n这是付费应用，当前不会自动触发购买。请先在 App Store 完成购买后，再回来下载。`,
-      '付费应用无法自动购买',
+      `App: ${appName}\nPrice: ${getSelectedAppPriceLabel()}\nAccount: ${accountEmail}\nRegion: ${accountRegion}\n\nThis is a paid app. Auto-purchase is not supported. Please complete the purchase in the App Store and come back to download.`,
+      'Cannot Auto-Purchase Paid App',
       {
-        confirmButtonText: '知道了',
+        confirmButtonText: 'OK',
         type: 'warning'
       }
     )
-    addLog(`[${modeLabel}] 未购买的付费应用，已提示先去 App Store 购买`)
+    addLog(`[${modeLabel}] Paid app not purchased, user prompted to buy in App Store`)
     return
   }
 
   const confirmed = await ElMessageBox.confirm(
-    `应用：${appName}\n价格：免费\n账号：${accountEmail}\n区域：${accountRegion}\n\n该应用是免费应用，但当前账号尚未领取。是否现在触发购买（领取）并继续下载？`,
-    '免费应用需要先领取',
+    `App: ${appName}\nPrice: Free\nAccount: ${accountEmail}\nRegion: ${accountRegion}\n\nThis is a free app, but the current account has not claimed it yet. Would you like to trigger a purchase (claim) and continue downloading?`,
+    'Free App Needs to Be Claimed First',
     {
-      confirmButtonText: '领取并下载',
-      cancelButtonText: '取消',
+      confirmButtonText: 'Claim & Download',
+      cancelButtonText: 'Cancel',
       type: 'warning'
     }
   ).then(() => true).catch(() => false)
 
   if (confirmed) {
-    addLog(`[${modeLabel}] 免费应用未购买，用户确认触发购买逻辑`)
+    addLog(`[${modeLabel}] Free app not claimed, user confirmed to trigger purchase`)
     return retryFn(true)
   }
 
-  addLog(`[${modeLabel}] 用户取消免费应用购买`)
+  addLog(`[${modeLabel}] User cancelled free app claim`)
 }
 
 const directLinkDownload = async (autoPurchase = false) => {
   if (!selectedAccount.value && selectedAccount.value !== 0) {
-    ElMessage.warning('请选择登录账号')
+    ElMessage.warning('Please select an account')
     return
   }
   if (!appid.value) {
-    ElMessage.warning('请填写 APPID')
+    ElMessage.warning('Please enter an App ID')
     return
   }
 
   try {
     const account = await resolveActiveAccount()
     if (!autoPurchase) {
-      const allowed = await preflightPurchaseGate(account, '直链', directLinkDownload)
+      const allowed = await preflightPurchaseGate(account, 'Direct', directLinkDownload)
       if (!allowed) return
     }
-    addLog('[直链] 获取直链中…')
+    addLog('[Direct] Fetching direct link…')
     const url = `${API_BASE}/download-url?token=${encodeURIComponent(account.token)}&appid=${encodeURIComponent(appid.value)}${appVerId.value ? `&appVerId=${encodeURIComponent(appVerId.value)}` : ''}${autoPurchase ? '&autoPurchase=true' : ''}`
     const response = await fetch(url, { credentials: 'include' })
     const data = await response.json()
@@ -1317,16 +1317,16 @@ const directLinkDownload = async (autoPurchase = false) => {
 
     if (!data.ok) {
       if (data.needsPurchase && !autoPurchase) {
-        ElMessage.warning(downloadBlockedReason.value || '当前账号未购买/未领取')
+        ElMessage.warning(downloadBlockedReason.value || 'Not purchased/claimed by current account')
         return
       }
-      ElMessage.error(`直链获取失败：${data.error || '未知错误'}`)
-      addLog(`[直链] 失败：${data.error || '未知错误'}`)
+      ElMessage.error(`Direct link failed: ${data.error || 'Unknown error'}`)
+      addLog(`[Direct] Failed: ${data.error || 'Unknown error'}`)
       return
     }
 
-    addLog(`[直链] 成功：文件名=${payload.fileName}，即将从 Apple CDN 直连下载`)
-    addLog(`[直链] URL（部分）=${String(payload.url).slice(0, 80)}...`)
+    addLog(`[Direct] Success: filename=${payload.fileName}, downloading directly from Apple CDN`)
+    addLog(`[Direct] URL (partial)=${String(payload.url).slice(0, 80)}...`)
 
     // Trigger browser download
     const a = document.createElement('a')
@@ -1337,32 +1337,32 @@ const directLinkDownload = async (autoPurchase = false) => {
     a.click()
     a.remove()
   } catch (error) {
-    ElMessage.error(`直链获取失败：${error.message}`)
-    addLog(`[直链] 失败：${error.message}`)
+    ElMessage.error(`Direct link failed: ${error.message}`)
+    addLog(`[Direct] Failed: ${error.message}`)
   }
 }
 
 const startDownloadWithProgress = async (autoPurchase = false) => {
   if (!selectedAccount.value && selectedAccount.value !== 0) {
-    ElMessage.warning('请选择登录账号')
+    ElMessage.warning('Please select an account')
     return
   }
   if (!appid.value) {
-    ElMessage.warning('请填写 APPID')
+    ElMessage.warning('Please enter an App ID')
     return
   }
 
   try {
     const account = await resolveActiveAccount()
     if (!autoPurchase) {
-      const allowed = await preflightPurchaseGate(account, '进度', startDownloadWithProgress)
+      const allowed = await preflightPurchaseGate(account, 'Progress', startDownloadWithProgress)
       if (!allowed) return
     }
 
     // Reset progress
     showProgress.value = true
     progressPercent.value = 0
-    progressStage.value = '准备中…'
+    progressStage.value = 'Preparing…'
     logs.value = ''
     downloadReadyUrl.value = ''
     downloadReadyFileSize.value = 0
@@ -1372,9 +1372,9 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     downloadInstallMethod.value = ''
     downloadInspection.value = null
     showActionButtons.value = false
-    addLog('[进度] 创建下载任务…')
+    addLog('[Progress] Creating download task…')
 
-    addLog(`[进度] 使用账号 ${account.email} 发起任务，token=${String(account.token).slice(0, 8)}…`)
+    addLog(`[Progress] Using account ${account.email}, token=${String(account.token).slice(0, 8)}…`)
     const response = await fetch(`${API_BASE}/start-download-direct`, {
       method: 'POST',
       credentials: 'include',
@@ -1398,18 +1398,18 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     if (!data.ok) {
       if (data.needsPurchase && !autoPurchase) {
         showProgress.value = false
-        ElMessage.warning(downloadBlockedReason.value || '当前账号未购买/未领取')
+        ElMessage.warning(downloadBlockedReason.value || 'Not purchased/claimed by current account')
         return
       }
-      ElMessage.error(`创建任务失败：${data.error || '未知错误'}`)
-      addLog(`[进度] 创建任务失败：${data.error || '未知错误'}`)
+      ElMessage.error(`Failed to create task: ${data.error || 'Unknown error'}`)
+      addLog(`[Progress] Failed to create task: ${data.error || 'Unknown error'}`)
       return
     }
 
     const { jobId } = data
-    addLog(`[进度] 任务已创建：${jobId}`)
+    addLog(`[Progress] Task created: ${jobId}`)
 
-    // 添加到队列 — 把 selectedApp 的图标/名称/开发者展平到顶层，供 DownloadQueue 直接渲染
+    // Add to queue — flatten selectedApp's icon/name/developer to top level for DownloadQueue rendering
     const app = props.selectedApp || {}
     const queueItem = {
       id: jobId,
@@ -1430,17 +1430,17 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
     // Connect to SSE / fallback polling
     connectToSSE(jobId, queueItem)
   } catch (error) {
-    ElMessage.error(`创建任务失败：${error.message}`)
-    addLog(`[进度] 创建任务失败：${error.message}`)
+    ElMessage.error(`Failed to create task: ${error.message}`)
+    addLog(`[Progress] Failed to create task: ${error.message}`)
   }
 }
 
 const pollJobStatus = (jobId, queueItem) => {
-  addLog('[进度] SSE 不可用，自动切换为轮询模式')
+  addLog('[Progress] SSE unavailable, switching to polling mode')
 
-  const markInterrupted = (message = '任务已失效，可能是服务重启或页面切换后丢失，请重新发起下载') => {
+  const markInterrupted = (message = 'Task is no longer valid, possibly due to server restart or page navigation. Please re-initiate the download.') => {
     clearInterval(timer)
-    addLog(`[失败] ${message}`)
+    addLog(`[Failed] ${message}`)
     const appStore = useAppStore()
     appStore.updateQueueItem(jobId, {
       status: 'failed',
@@ -1458,7 +1458,7 @@ const pollJobStatus = (jobId, queueItem) => {
       const response = await fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`, { credentials: 'include' })
       const data = await response.json()
       if (response.status === 404) {
-        markInterrupted(data?.error || '任务已不存在')
+        markInterrupted(data?.error || 'Task no longer exists')
         return
       }
       if (!response.ok || !data.ok || !data.data) return
@@ -1475,17 +1475,17 @@ const pollJobStatus = (jobId, queueItem) => {
         appStore.updateQueueItem(jobId, { stage: snapshot.stage })
       }
       if (snapshot.error) {
-        addLog(`[错误] ${snapshot.error}`)
+        addLog(`[Error] ${snapshot.error}`)
       }
 
       if (snapshot.status === 'ready') {
         clearInterval(timer)
         progressPercent.value = 100
-        progressStage.value = '下载已完成'
+        progressStage.value = 'Download complete'
         if (snapshot.installMethod === 'download_only') {
-          addLog('[进度] 文件已保存到服务器，仅支持下载导出')
+          addLog('[Progress] File saved to server, download export only')
         } else {
-          addLog('[进度] 文件已保存到服务器，可手动下载或安装')
+          addLog('[Progress] File saved to server, can be downloaded or installed manually')
         }
 
         const appStore = useAppStore()
@@ -1511,20 +1511,20 @@ const pollJobStatus = (jobId, queueItem) => {
         showActionButtons.value = !!(snapshot.downloadUrl || snapshot.installUrl)
       } else if (snapshot.status === 'failed') {
         clearInterval(timer)
-        addLog(`[失败] ${snapshot.error || '任务失败'}`)
+        addLog(`[Failed] ${snapshot.error || 'Task failed'}`)
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, {
           status: 'failed',
-          error: snapshot.error || '任务失败'
+          error: snapshot.error || 'Task failed'
         })
         if (queueItem) {
           queueItem.status = 'error'
-          queueItem.error = snapshot.error || '任务失败'
+          queueItem.error = snapshot.error || 'Task failed'
         }
       }
     } catch (error) {
       clearInterval(timer)
-      addLog(`[错误] 轮询任务状态失败：${error.message}`)
+      addLog(`[Error] Failed to poll task status: ${error.message}`)
       const appStore = useAppStore()
       appStore.updateQueueItem(jobId, {
         status: 'failed',
@@ -1545,7 +1545,7 @@ const connectToSSE = (jobId, queueItem) => {
     const sseUrl = new URL(`${API_BASE}/progress-sse?jobId=${encodeURIComponent(jobId)}`, origin).toString()
     es = new EventSource(sseUrl)
   } catch (error) {
-    addLog(`[进度] SSE 初始化失败：${error.message}`)
+    addLog(`[Progress] SSE initialization failed: ${error.message}`)
     pollJobStatus(jobId, queueItem)
     return
   }
@@ -1556,28 +1556,28 @@ const connectToSSE = (jobId, queueItem) => {
       
       if (data?.progress?.percent != null) {
         progressPercent.value = data.progress.percent
-        // 更新队列项进度
+        // Update queue item progress
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, { progress: data.progress.percent })
       }
       
       if (data?.progress?.stage) {
         const stageMap = {
-          'auth': '获取下载信息',
-          'download-start': '开始下载',
-          'download-progress': '下载中',
-          'merge': '合并分块',
-          'sign': '写入签名',
-          'done': '完成'
+          'auth': 'Fetching download info',
+          'download-start': 'Starting download',
+          'download-progress': 'Downloading',
+          'merge': 'Merging chunks',
+          'sign': 'Writing signature',
+          'done': 'Done'
         }
         progressStage.value = stageMap[data.progress.stage] || data.progress.stage
-        // 更新队列项状态
+        // Update queue item status
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, { stage: progressStage.value })
       }
       
       if (data?.error) {
-        addLog(`[错误] ${data.error}`)
+        addLog(`[Error] ${data.error}`)
         const appName = props.selectedApp?.trackName || appid.value
         notifications.notifyDownloadFailed(appName, data.error)
         const appStore = useAppStore()
@@ -1589,10 +1589,10 @@ const connectToSSE = (jobId, queueItem) => {
       
       if (data.status === 'ready') {
         progressPercent.value = 100
-        progressStage.value = '下载已完成'
-        addLog('[进度] 文件已保存到服务器，可在任务完成后刷新获取交付信息')
+        progressStage.value = 'Download complete'
+        addLog('[Progress] File saved to server, refresh after task completes to get delivery info')
 
-        // 更新队列项状态
+        // Update queue item status
         const appStore = useAppStore()
         appStore.updateQueueItem(jobId, {
           status: 'completed',
@@ -1619,11 +1619,11 @@ const connectToSSE = (jobId, queueItem) => {
     try {
       const data = JSON.parse(ev.data || '{}')
       if (data.status === 'ready') {
-        addLog('[完成] 任务已就绪')
-        // 发送下载完成通知
+        addLog('[Done] Task is ready')
+        // Send download complete notification
         const appName = props.selectedApp?.trackName || appid.value
         notifications.notifyDownloadComplete(appName)
-        // 获取任务信息，包括安装URL
+        // Fetch task info including install URL
         fetch(`${API_BASE}/job-info?jobId=${encodeURIComponent(jobId)}`, { credentials: 'include' })
           .then(res => res.json())
           .then(jobData => {
@@ -1638,9 +1638,9 @@ const connectToSSE = (jobId, queueItem) => {
               showActionButtons.value = !!(jobData.data.downloadUrl || jobData.data.installUrl)
 
               if (jobData.data.otaInstallable && jobData.data.installUrl) {
-                addLog('[安装] OTA 安装链接已生成')
+                addLog('[Install] OTA install link generated')
               } else if (jobData.data.installMethod === 'download_only') {
-                addLog('[交付] 该包不支持 OTA 安装，仅提供下载')
+                addLog('[Delivery] This package does not support OTA installation, download only')
               }
 
               const appStore = useAppStore()
@@ -1658,44 +1658,44 @@ const connectToSSE = (jobId, queueItem) => {
             }
           })
           .catch(() => {
-            // 忽略错误
+            // Ignore errors
           })
       } else if (data.status === 'failed') {
-        addLog('[失败] 任务失败')
+        addLog('[Failed] Task failed')
         const appName = props.selectedApp?.trackName || appid.value
         notifications.notifyDownloadFailed(appName)
         if (queueItem) {
           queueItem.status = 'error'
         }
       } else {
-        addLog(`[结束] 任务结束：${data.status || 'unknown'}`)
+        addLog(`[End] Task ended: ${data.status || 'unknown'}`)
       }
     } catch {}
     es.close()
   })
 
   es.onerror = () => {
-    addLog('[错误] SSE 连接断开，切换为轮询模式')
+    addLog('[Error] SSE connection lost, switching to polling mode')
     es.close()
     pollJobStatus(jobId, queueItem)
   }
 }
 
-// 监听账号更新
+// Watch account updates
 watch(() => props.accountsUpdated, async () => {
-  ElMessage.info('检测到账号状态变化，正在刷新账号与购买状态…')
+  ElMessage.info('Account status change detected, refreshing accounts and purchase status…')
   await loadAccounts()
   await refreshSelectedAppMetadata()
   await refreshPurchaseStatus()
   if (appid.value && selectedAccount.value !== null && selectedAccount.value !== undefined && selectedAccount.value !== '') {
     await fetchVersions()
   }
-  ElMessage.success('账号刷新完成，页面状态已同步')
+  ElMessage.success('Account refreshed and page state synced')
 })
 
 const openInstallUrl = (url) => {
   if (!url) {
-    ElMessage.warning('安装链接未生成')
+    ElMessage.warning('Install link not yet available')
     return
   }
 
@@ -1704,7 +1704,7 @@ const openInstallUrl = (url) => {
 
 const installDownloadedIpa = async () => {
   if (!downloadInstallUrl.value) {
-    ElMessage.warning('安装链接未生成')
+    ElMessage.warning('Install link not yet available')
     return
   }
 
@@ -1713,12 +1713,12 @@ const installDownloadedIpa = async () => {
 
   if (!isHttpsEnvironment && !isLocalhost) {
     const action = await ElMessageBox.confirm(
-      '按 OpenList / Oplist 的现成方案，OTA 安装必须使用 HTTPS + 有效证书；当前环境不是 HTTPS，iOS 不会响应安装。您现在可以先直接下载 IPA，或改用 HTTPS 域名后再试。',
-      '无法开始 OTA 安装',
+      'Per the OpenList/Oplist approach, OTA installation requires HTTPS + valid certificate. The current environment is not HTTPS, so iOS will not respond. You can download the IPA file directly or switch to an HTTPS domain and try again.',
+      'Cannot Start OTA Installation',
       {
         distinguishCancelAndClose: true,
-        confirmButtonText: '直接下载文件',
-        cancelButtonText: '取消操作',
+        confirmButtonText: 'Download File',
+        cancelButtonText: 'Cancel',
         type: 'warning',
         center: true
       }
@@ -1736,15 +1736,15 @@ const installDownloadedIpa = async () => {
   }
 
   if (isHttpsEnvironment) {
-    ElMessage.success('正在打开安装链接...')
+    ElMessage.success('Opening install link...')
     openInstallUrl(downloadInstallUrl.value)
   } else if (isLocalhost) {
     const confirmed = await ElMessageBox.confirm(
-      '当前是 localhost 环境。按 OpenList / Oplist 文档，OTA 安装需要 HTTPS + 有效证书；localhost 基本不会成功。若你只是想继续试一把可以继续，否则请先切到 HTTPS 域名。',
-      '安装前检查',
+      'Current environment is localhost. Per OpenList/Oplist documentation, OTA installation requires HTTPS + valid certificate; localhost will likely not work. You can continue trying or switch to an HTTPS domain.',
+      'Pre-Installation Check',
       {
-        confirmButtonText: '继续尝试',
-        cancelButtonText: '取消',
+        confirmButtonText: 'Try Anyway',
+        cancelButtonText: 'Cancel',
         type: 'info'
       }
     ).then(() => true).catch(() => false)
@@ -1757,7 +1757,7 @@ const installDownloadedIpa = async () => {
 
 const downloadCompletedIpa = () => {
   if (!downloadReadyUrl.value) {
-    ElMessage.warning('下载链接未生成')
+    ElMessage.warning('Download link not yet available')
     return
   }
 
@@ -1780,7 +1780,7 @@ onMounted(() => {
   loadAccounts()
   restoreStateFromStore()
   
-  // 检测当前环境
+  // Detect current environment
   isHttps.value = window.location.protocol === 'https:'
   currentProtocol.value = window.location.protocol
   
@@ -1848,7 +1848,7 @@ onMounted(() => {
   font-size: 15px;
 }
 
-/* 快速账号选择器样式 */
+/* Quick account selector styles */
 .account-quick-select {
   width: 320px;
   max-width: 100%;
@@ -1902,7 +1902,7 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-/* 迷你区域徽章 */
+/* Mini region badge */
 .region-badge-mini {
   display: inline-flex;
   flex-shrink: 0;
@@ -2037,7 +2037,7 @@ onMounted(() => {
   color: #f87171;
 }
 
-/* 区域徽章样式 */
+/* Region badge styles */
 .region-badge {
   display: inline-flex;
   align-items: center;
@@ -2113,7 +2113,7 @@ onMounted(() => {
   color: #60a5fa;
 }
 
-/* 移动端响应式样式 */
+/* Mobile responsive styles */
 @media (max-width: 767px) {
   .card {
     padding: 12px;
@@ -2124,13 +2124,13 @@ onMounted(() => {
     font-size: 15px;
   }
   
-  /* 移动端账号选择器 */
+  /* Mobile account selector */
   .account-quick-select {
     width: 100%;
     margin-top: 12px;
   }
   
-  /* 移动端搜索区域提示 */
+  /* Mobile search area notice */
   .bg-blue-50.dark\:bg-blue-900\/20 {
     flex-direction: column;
     align-items: flex-start !important;
@@ -2141,7 +2141,7 @@ onMounted(() => {
     width: 100%;
   }
   
-  /* 搜索结果卡片自适应 */
+  /* Search result card adaptive */
   .search-result-item {
     display: flex;
     align-items: center;
@@ -2159,7 +2159,7 @@ onMounted(() => {
     max-width: calc(100vw - 140px);
   }
   
-  /* 选中应用信息卡片 */
+  /* Selected app info card */
   .selected-app-card {
     padding: 12px !important;
   }
@@ -2175,12 +2175,12 @@ onMounted(() => {
     overflow-wrap: break-word;
   }
   
-  /* 上传区域 */
+  /* Upload area */
   .upload-demo :deep(.el-upload-dragger) {
     padding: 20px !important;
   }
   
-  /* 进度卡片 */
+  /* Progress card */
   .el-card {
     margin-top: 12px !important;
   }

@@ -10,7 +10,7 @@
       class="min-h-screen flex items-center justify-center"
     >
       <div class="text-gray-400">
-        加载中...
+        Loading...
       </div>
     </div>
 
@@ -46,7 +46,7 @@
                   IPA Tool
                 </h1>
                 <p class="text-xs text-gray-500 dark:text-gray-400">
-                  IPA管理工具
+                  IPA Management Tool
                 </p>
               </div>
             </div>
@@ -54,7 +54,7 @@
             <div class="flex items-center space-x-1">
               <button 
                 class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors" 
-                :title="isDark ? '切换到浅色模式' : '切换到深色模式'"
+                :title="isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'"
                 @click="toggleDark"
               >
                 <svg
@@ -76,7 +76,7 @@
               </button>
               <button
                 class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                title="退出登录"
+                title="Log Out"
                 @click="handleLogout"
               >
                 <svg
@@ -92,7 +92,7 @@
                 href="https://github.com/ruanrrn/ipaTool" 
                 target="_blank"
                 class="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                title="查看源代码"
+                title="View Source Code"
               >
                 <svg
                   class="w-5 h-5 text-gray-600 dark:text-gray-300"
@@ -158,7 +158,7 @@ async function handleLogout() {
     await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'same-origin' })
   } catch { /* ignore */ }
   authState.value = 'unauthenticated'
-  ElMessage.success('已退出登录')
+  ElMessage.success('Logged out')
 }
 
 const handleAppSelected = (app) => appStore.setSelectedApp(app)

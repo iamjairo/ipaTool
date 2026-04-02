@@ -8,16 +8,16 @@
           </svg>
         </div>
         <div>
-          <h2 class="text-xl font-bold text-gray-900 dark:text-white">IPA 管理</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">管理服务器上的 IPA 文件 · 已占用 {{ formatStorageM(totalStorageBytes) }}</p>
+          <h2 class="text-xl font-bold text-gray-900 dark:text-white">IPA Manager</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Manage IPA files on the server · Storage used: {{ formatStorageM(totalStorageBytes) }}</p>
         </div>
       </div>
       <div class="flex items-center gap-2 flex-wrap">
         <el-checkbox :model-value="allSelected" :indeterminate="selectedCount > 0 && !allSelected" @change="toggleSelectAll">
-          全选
+          Select All
         </el-checkbox>
         <el-button size="small" type="danger" plain :disabled="selectedCount === 0" @click="removeSelectedArtifacts">
-          批量清理{{ selectedCount > 0 ? `（${selectedCount}）` : '' }}
+          Batch Clean{{ selectedCount > 0 ? ` (${selectedCount})` : '' }}
         </el-button>
         <el-upload
           :action="uploadUrl"
@@ -33,10 +33,10 @@
             <template #icon>
               <el-icon><UploadFilled /></el-icon>
             </template>
-            {{ uploading ? `上传中 ${uploadProgress}%` : '上传 IPA' }}
+            {{ uploading ? `Uploading ${uploadProgress}%` : 'Upload IPA' }}
           </el-button>
         </el-upload>
-        <el-button :loading="loading" plain @click="loadArtifacts">刷新</el-button>
+        <el-button :loading="loading" plain @click="loadArtifacts">Refresh</el-button>
       </div>
     </div>
 
@@ -51,9 +51,9 @@
             <div class="min-w-0">
               <div class="artifact-title">{{ item.appName || item.fileName }}</div>
               <div class="artifact-meta">
-                <span>{{ item.artistName || '未知开发者' }}</span>
-                <span>版本 {{ item.version || '未知' }}</span>
-                <span>账号 {{ item.accountEmail || '未知账号' }}</span>
+                <span>{{ item.artistName || 'Unknown Developer' }}</span>
+                <span>Version {{ item.version || 'Unknown' }}</span>
+                <span>Account {{ item.accountEmail || 'Unknown Account' }}</span>
                 <span>{{ formatFileSize(item.fileSize) }}</span>
               </div>
             </div>
@@ -61,18 +61,18 @@
           </div>
           <div class="artifact-path">{{ item.filePath }}</div>
           <div class="artifact-actions">
-            <el-button type="primary" size="small" @click="download(item.downloadUrl)">下载</el-button>
+            <el-button type="primary" size="small" @click="download(item.downloadUrl)">Download</el-button>
 
-            <el-button v-if="item.otaInstallable && item.installUrl" type="success" size="small" @click="install(item.installUrl)">安装</el-button>
+            <el-button v-if="item.otaInstallable && item.installUrl" type="success" size="small" @click="install(item.installUrl)">Install</el-button>
             <el-tooltip v-else-if="item.installMethod === 'download_only' && item.inspection" :content="item.inspection.summary" placement="top">
               <span>
-                <el-tag size="small" type="info">仅下载</el-tag>
+                <el-tag size="small" type="info">Download Only</el-tag>
               </span>
             </el-tooltip>
-            <el-tag v-else-if="item.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
-            <el-button v-else type="success" size="small" disabled>安装</el-button>
+            <el-tag v-else-if="item.installMethod === 'download_only'" size="small" type="info">Download Only</el-tag>
+            <el-button v-else type="success" size="small" disabled>Install</el-button>
 
-            <el-button type="danger" size="small" plain @click="removeArtifact(item)">删除</el-button>
+            <el-button type="danger" size="small" plain @click="removeArtifact(item)">Delete</el-button>
           </div>
         </div>
       </div>
@@ -82,8 +82,8 @@
       <svg class="mx-auto h-16 w-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
       </svg>
-      <p class="text-lg font-medium">暂无 IPA 文件</p>
-      <p class="text-sm mt-2">下载完成后会出现在这里</p>
+      <p class="text-lg font-medium">No IPA files found</p>
+      <p class="text-sm mt-2">Files will appear here after download</p>
     </div>
 
     <div v-if="uploading" class="-mt-2">
@@ -92,7 +92,7 @@
 
     <el-dialog
       v-model="deleteDialogVisible"
-      title="确认删除 IPA"
+      title="Confirm Delete IPA"
       width="min(92vw, 420px)"
       :close-on-click-modal="false"
       :close-on-press-escape="!deletingArtifact"
@@ -100,17 +100,17 @@
       destroy-on-close
     >
       <div class="space-y-3 text-sm">
-        <p class="text-gray-800 dark:text-gray-100">确定删除这个 IPA 文件吗？</p>
+        <p class="text-gray-800 dark:text-gray-100">Are you sure you want to delete this IPA file?</p>
         <div v-if="pendingDeleteItem" class="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600 dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300 break-all">
           <div class="font-medium text-gray-900 dark:text-gray-100">{{ pendingDeleteItem.appName || pendingDeleteItem.fileName }}</div>
           <div class="mt-1">{{ pendingDeleteItem.filePath }}</div>
         </div>
-        <p class="text-xs text-gray-500 dark:text-gray-400">只删除服务器上的这个 IPA 文件，不清数据库。</p>
+        <p class="text-xs text-gray-500 dark:text-gray-400">This only deletes the IPA file from the server, not from the database.</p>
       </div>
       <template #footer>
         <div class="flex justify-end gap-2">
-          <el-button :disabled="deletingArtifact" @click="closeDeleteDialog">取消</el-button>
-          <el-button type="danger" :loading="deletingArtifact" @click="confirmDeleteArtifact">删除</el-button>
+          <el-button :disabled="deletingArtifact" @click="closeDeleteDialog">Cancel</el-button>
+          <el-button type="danger" :loading="deletingArtifact" @click="confirmDeleteArtifact">Delete</el-button>
         </div>
       </template>
     </el-dialog>
@@ -143,12 +143,12 @@ const loadArtifacts = async () => {
   try {
     const response = await fetch(`${API_BASE}/ipa-files`, { credentials: 'include' })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.error || '加载失败')
+    if (!data.ok) throw new Error(data.error || 'Failed to load')
     artifacts.value = data.data || []
     const validIds = new Set(artifacts.value.map(item => item.id))
     selectedIds.value = selectedIds.value.filter(id => validIds.has(id))
   } catch (error) {
-    ElMessage.error(error.message || '加载失败')
+    ElMessage.error(error.message || 'Failed to load')
   } finally {
     loading.value = false
   }
@@ -205,10 +205,10 @@ const deleteArtifactById = async (id) => {
   })
   const data = await response.json()
   if (data.ok) return { missing: false }
-  if (response.status === 404 || data.error === 'IPA 文件不存在') {
+  if (response.status === 404 || data.error === 'IPA file does not exist') {
     return { missing: true }
   }
-  throw new Error(data.error || '删除失败')
+  throw new Error(data.error || 'Delete failed')
 }
 
 const removeArtifact = (item) => {
@@ -232,13 +232,13 @@ const confirmDeleteArtifact = async () => {
     deleteDialogVisible.value = false
     pendingDeleteItem.value = null
     if (result.missing) {
-      ElMessage.warning('文件已不存在，列表已刷新')
+      ElMessage.warning('File no longer exists, list refreshed')
     } else {
-      ElMessage.success('IPA 已删除')
+      ElMessage.success('IPA deleted')
     }
     await loadArtifacts()
   } catch (error) {
-    ElMessage.error(error.message || '删除失败')
+    ElMessage.error(error.message || 'Delete failed')
   } finally {
     deletingArtifact.value = false
   }
@@ -247,22 +247,22 @@ const confirmDeleteArtifact = async () => {
 const removeSelectedArtifacts = async () => {
   if (selectedIds.value.length === 0) return
   try {
-    await ElMessageBox.confirm(`确定批量清理 ${selectedIds.value.length} 个安装包吗？`, '确认批量清理', {
+    await ElMessageBox.confirm(`Are you sure you want to batch clean ${selectedIds.value.length} package(s)?`, 'Confirm Batch Clean', {
       type: 'warning',
-      confirmButtonText: '批量清理',
-      cancelButtonText: '取消'
+      confirmButtonText: 'Batch Clean',
+      cancelButtonText: 'Cancel'
     })
 
     for (const id of [...selectedIds.value]) {
       await deleteArtifactById(id)
     }
 
-    ElMessage.success(`已清理 ${selectedIds.value.length} 个安装包`)
+    ElMessage.success(`Cleaned ${selectedIds.value.length} package(s)`)
     selectedIds.value = []
     await loadArtifacts()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '批量清理失败')
+      ElMessage.error(error.message || 'Batch clean failed')
     }
   }
 }
@@ -280,7 +280,7 @@ const toggleSelectAll = (checked) => {
 }
 
 const formatFileSize = (bytes) => {
-  if (!bytes) return '未知'
+  if (!bytes) return 'Unknown'
   const units = ['B', 'KB', 'MB', 'GB']
   let value = bytes
   let unitIndex = 0
@@ -294,10 +294,10 @@ const formatFileSize = (bytes) => {
 const formatStorageM = (bytes) => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} M`
 
 const formatDate = (value) => {
-  if (!value) return '未知时间'
+  if (!value) return 'Unknown'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(undefined, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -317,11 +317,11 @@ const beforeUpload = (file) => {
   const isLt2G = file.size / 1024 / 1024 / 1024 < 2
 
   if (!isIPA) {
-    ElMessage.error('只能上传 .ipa 格式的文件')
+    ElMessage.error('Only .ipa files can be uploaded')
     return false
   }
   if (!isLt2G) {
-    ElMessage.error('上传文件大小不能超过 2GB')
+    ElMessage.error('File size cannot exceed 2GB')
     return false
   }
 
@@ -344,18 +344,18 @@ const handleUploadSuccess = (response) => {
       fileName: response.fileName,
       installUrl: response.installUrl
     }
-    ElMessage.success('文件上传成功')
+    ElMessage.success('File uploaded successfully')
     // Refresh the artifact list after upload
     loadArtifacts()
   } else {
-    ElMessage.error(response.error || '上传失败')
+    ElMessage.error(response.error || 'Upload failed')
   }
 }
 
 const handleUploadError = (error) => {
   uploading.value = false
   uploadProgress.value = 0
-  ElMessage.error('上传失败：' + error.message)
+  ElMessage.error('Upload failed: ' + error.message)
 }
 
 onMounted(loadArtifacts)

@@ -15,10 +15,10 @@
         </div>
         <div>
           <h2 class="text-xl font-bold text-gray-900 dark:text-white">
-            应用订阅与更新
+            App Subscriptions & Updates
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            {{ subscriptions.length }} 个订阅 | {{ updateCount }} 个更新
+            {{ subscriptions.length }}  subscriptions | {{ updateCount }}  updates
           </p>
         </div>
       </div>
@@ -29,25 +29,25 @@
           :loading="checking"
           @click="checkUpdates"
         >
-          检查更新
+          Check for Updates
         </el-button>
         <el-button
           :icon="Plus"
           @click="showSubscribeDialog = true"
         >
-          添加订阅
+          Add Subscription
         </el-button>
       </div>
     </div>
 
-    <!-- 更新通知 -->
+    <!-- Update Notifications -->
     <div
       v-if="updates.length > 0"
       class="mb-6"
     >
       <div class="flex items-center gap-2 mb-3">
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-          发现更新
+          Updates Found
         </h3>
         <el-badge
           :value="updates.length"
@@ -87,7 +87,7 @@
                 size="small"
                 @click="downloadUpdate(update)"
               >
-                下载新版本
+                Download New Version
               </el-button>
             </div>
           </template>
@@ -95,11 +95,11 @@
       </el-space>
     </div>
 
-    <!-- 订阅列表 -->
+    <!-- Subscription List -->
     <div v-if="subscriptions.length > 0">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-lg font-semibold text-gray-900 dark:text-white">
-          我的订阅
+          My Subscriptions
         </h3>
       </div>
       <el-space
@@ -134,11 +134,11 @@
                 />
               </div>
               <p class="text-sm text-gray-500 dark:text-gray-400">
-                {{ sub.artist_name || '未知开发者' }}
+                {{ sub.artist_name || 'Unknown Developer' }}
               </p>
               <div class="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
-                <span v-if="sub.current_version">版本: {{ sub.current_version }}</span>
-                <span v-if="sub.last_checked">检查于: {{ formatDate(sub.last_checked) }}</span>
+                <span v-if="sub.current_version">Version: {{ sub.current_version }}</span>
+                <span v-if="sub.last_checked">Checked: {{ formatDate(sub.last_checked) }}</span>
               </div>
             </div>
           </div>
@@ -146,7 +146,7 @@
       </el-space>
     </div>
 
-    <!-- 空状态 -->
+    <!-- Empty State -->
     <div
       v-else
       class="text-center py-12 text-gray-500 dark:text-gray-400"
@@ -165,17 +165,17 @@
         />
       </svg>
       <p class="text-lg font-medium">
-        暂无订阅
+        No subscriptions
       </p>
       <p class="text-sm mt-2">
-        添加应用订阅，及时获取更新通知
+        Add app subscriptions to receive update notifications
       </p>
     </div>
 
-    <!-- 添加订阅对话框 -->
+    <!-- Add Subscription Dialog -->
     <el-dialog
       v-model="showSubscribeDialog"
-      title="添加订阅"
+      title="Add Subscription"
       width="500px"
       :close-on-click-modal="false"
     >
@@ -183,47 +183,47 @@
         :model="subscribeForm"
         label-width="100px"
       >
-        <el-form-item label="应用ID">
+        <el-form-item label="App ID">
           <el-input
             v-model="subscribeForm.app_id"
-            placeholder="输入应用的 Bundle ID 或 Track ID"
+            placeholder="Enter the app's Bundle ID or Track ID"
           />
         </el-form-item>
-        <el-form-item label="应用名称">
+        <el-form-item label="App Name">
           <el-input
             v-model="subscribeForm.app_name"
-            placeholder="输入应用名称"
+            placeholder="Enter app name"
           />
         </el-form-item>
-        <el-form-item label="账号邮箱">
+        <el-form-item label="Account Email">
           <el-input
             v-model="subscribeForm.account_email"
-            placeholder="输入用于下载的账号邮箱"
+            placeholder="Enter the account email used for downloading"
           />
         </el-form-item>
-        <el-form-item label="区域">
+        <el-form-item label="Region">
           <el-select
             v-model="subscribeForm.account_region"
-            placeholder="选择区域"
+            placeholder="Select region"
           >
             <el-option
-              label="美国"
+              label="United States"
               value="US"
             />
             <el-option
-              label="中国"
+              label="China"
               value="CN"
             />
             <el-option
-              label="日本"
+              label="Japan"
               value="JP"
             />
             <el-option
-              label="英国"
+              label="United Kingdom"
               value="GB"
             />
             <el-option
-              label="德国"
+              label="Germany"
               value="DE"
             />
           </el-select>
@@ -232,14 +232,14 @@
 
       <template #footer>
         <el-button @click="showSubscribeDialog = false">
-          取消
+          Cancel
         </el-button>
         <el-button
           type="primary"
           :loading="subscribing"
           @click="addSubscription"
         >
-          添加
+          Add
         </el-button>
       </template>
     </el-dialog>
@@ -273,7 +273,7 @@ const subscribeForm = ref({
 
 const updateCount = computed(() => updates.value.length)
 
-// 加载订阅列表
+// Load subscription list
 const loadSubscriptions = async () => {
   try {
     const response = await fetch(`${API_BASE}/subscriptions`, { credentials: 'include' })
@@ -283,11 +283,11 @@ const loadSubscriptions = async () => {
     }
   } catch (error) {
     console.error('Failed to load subscriptions:', error)
-    ElMessage.error('加载订阅失败')
+    ElMessage.error('Failed to load subscriptions')
   }
 }
 
-// 检查更新
+// Check for updates
 const checkUpdates = async () => {
   checking.value = true
   try {
@@ -297,8 +297,8 @@ const checkUpdates = async () => {
     if (data.ok) {
       updates.value = data.data.updates || []
       if (updates.value.length > 0) {
-        ElMessage.success(`发现 ${updates.value.length} 个更新`)
-        // 逐个发送浏览器通知
+        ElMessage.success(`Found ${updates.value.length} update(s)`)
+        // Send browser notifications one by one
         for (const update of updates.value) {
           notifications.notifyVersionUpdate(
             update.app_name,
@@ -307,23 +307,23 @@ const checkUpdates = async () => {
           )
         }
       } else {
-        ElMessage.info('所有应用都是最新版本')
+        ElMessage.info('All apps are up to date')
       }
     } else {
-      ElMessage.error(data.error || '检查更新失败')
+      ElMessage.error(data.error || 'Failed to check for updates')
     }
   } catch (error) {
     console.error('Failed to check updates:', error)
-    ElMessage.error('检查更新失败')
+    ElMessage.error('Failed to check for updates')
   } finally {
     checking.value = false
   }
 }
 
-// 添加订阅
+// Add subscription
 const addSubscription = async () => {
   if (!subscribeForm.value.app_id || !subscribeForm.value.app_name || !subscribeForm.value.account_email) {
-    ElMessage.warning('请填写完整信息')
+    ElMessage.warning('Please fill in all required fields')
     return
   }
 
@@ -338,7 +338,7 @@ const addSubscription = async () => {
     const data = await response.json()
 
     if (data.ok) {
-      ElMessage.success('订阅添加成功')
+      ElMessage.success('Subscription added successfully')
       showSubscribeDialog.value = false
       Object.assign(subscribeForm.value, {
         app_id: '',
@@ -350,20 +350,20 @@ const addSubscription = async () => {
       })
       await loadSubscriptions()
     } else {
-      ElMessage.error(data.error || '添加订阅失败')
+      ElMessage.error(data.error || 'Failed to add subscription')
     }
   } catch (error) {
     console.error('Failed to add subscription:', error)
-    ElMessage.error('添加订阅失败')
+    ElMessage.error('Failed to add subscription')
   } finally {
     subscribing.value = false
   }
 }
 
-// 移除订阅
+// Remove subscription
 const removeSubscription = async (sub) => {
   try {
-    await ElMessageBox.confirm(`确定要取消订阅 "${sub.app_name}" 吗？`, '确认取消', {
+    await ElMessageBox.confirm(`Are you sure you want to unsubscribe from "${sub.app_name}"?`, 'Confirm Unsubscribe', {
       type: 'warning'
     })
 
@@ -374,35 +374,35 @@ const removeSubscription = async (sub) => {
     const data = await response.json()
 
     if (data.ok) {
-      ElMessage.success('取消订阅成功')
+      ElMessage.success('Unsubscribed successfully')
       await loadSubscriptions()
     } else {
-      ElMessage.error(data.error || '取消订阅失败')
+      ElMessage.error(data.error || 'Failed to unsubscribe')
     }
   } catch (error) {
     if (error !== 'cancel') {
       console.error('Failed to remove subscription:', error)
-      ElMessage.error('取消订阅失败')
+      ElMessage.error('Failed to unsubscribe')
     }
   }
 }
 
-// 下载更新
+// Download update
 const downloadUpdate = (update) => {
-  ElMessage.info(`开始下载 ${update.app_name} 的更新...`)
-  // 这里可以触发下载逻辑
+  ElMessage.info(`Starting download of update for ${update.app_name}...`)
+  // Download logic can be triggered here
 }
 
-// 格式化日期
+// Format date
 const formatDate = (dateString) => {
   if (!dateString) return ''
   const date = new Date(dateString)
-  return date.toLocaleString('zh-CN')
+  return date.toLocaleString()
 }
 
 onMounted(() => {
   loadSubscriptions()
-  // 自动检查更新
+  // Auto-check for updates
   checkUpdates()
 })
 </script>

@@ -19,10 +19,10 @@
       </div>
       <div class="header-text">
         <h2 class="text-xl font-bold text-gray-900 dark:text-white">
-          账号管理
+          Account Management
         </h2>
         <p class="text-sm text-gray-500 dark:text-gray-400">
-          管理 Apple ID 账号
+          Manage Apple ID accounts
         </p>
       </div>
     </div>
@@ -34,7 +34,7 @@
     >
       <div class="section-header">
         <h3 class="section-title">
-          已登录账号
+          Logged-in Accounts
         </h3>
         <span class="section-count">{{ accounts.length }}</span>
       </div>
@@ -70,7 +70,7 @@
               circle
               size="small"
               class="refresh-button"
-              :title="account.hasSavedCredentials ? '刷新会话' : '未保存密码，无法自动刷新'"
+              :title="account.hasSavedCredentials ? 'Refresh Session' : 'No saved password, cannot auto-refresh'"
               :disabled="!account.hasSavedCredentials"
               :loading="refreshingIndex === index"
               @click="refreshAccount(index)"
@@ -81,7 +81,7 @@
               circle
               size="small"
               class="remove-button"
-              title="删除账号"
+              title="Delete Account"
               @click="removeAccount(index)"
             />
           </div>
@@ -94,15 +94,15 @@
       <div class="form-section">
         <div class="form-header">
           <h3 class="form-title">
-            登录 Apple ID
+            Sign in with Apple ID
           </h3>
           <p class="form-subtitle">
-            支持多账号登录
+            Supports multiple accounts
           </p>
         </div>
         <div class="form-fields">
           <div class="form-field">
-            <label class="field-label">邮箱</label>
+            <label class="field-label">Email</label>
             <el-input
               v-model="newAccount.email"
               type="email"
@@ -121,7 +121,7 @@
           </div>
 
           <div class="form-field">
-            <label class="field-label">密码</label>
+            <label class="field-label">Password</label>
             <el-input
               v-model="newAccount.password"
               type="password"
@@ -140,11 +140,11 @@
           </div>
 
           <div class="form-field">
-            <label class="field-label">验证码</label>
+            <label class="field-label">Verification Code</label>
             <el-input
               v-model="newAccount.code"
               type="text"
-              placeholder="两步验证码（如需要）"
+              placeholder="Two-factor code (if required)"
               :disabled="logging"
               size="large"
               clearable
@@ -161,18 +161,18 @@
               v-if="mfaRequired"
               class="mfa-hint"
             >
-              ⚠️ 请输入受信任设备上收到的 6 位验证码
+              ⚠️ Please enter the 6-digit code received on your trusted device
             </p>
           </div>
 
-          <!-- 保存密码选项 -->
+          <!-- Save password option -->
           <div class="form-field">
             <el-checkbox
               v-model="savePassword"
               :disabled="logging"
               class="save-password-checkbox"
             >
-              <span class="checkbox-label">保存密码以便下次自动登录</span>
+              <span class="checkbox-label">Save password for automatic login next time</span>
             </el-checkbox>
           </div>
 
@@ -187,10 +187,10 @@
             <template #icon>
               <el-icon><Right /></el-icon>
             </template>
-            {{ logging ? '登录中...' : '登录' }}
+            {{ logging ? 'Signing in...' : 'Sign In' }}
           </el-button>
 
-          <!-- 自动登录状态提示 -->
+          <!-- Auto-login status message -->
           <div
             v-if="autoLogging"
             class="auto-login-status"
@@ -198,7 +198,7 @@
             <el-icon class="is-loading">
               <Loading />
             </el-icon>
-            <span>正在自动登录保存的账号...</span>
+            <span>Automatically signing in to saved accounts...</span>
           </div>
         </div>
       </div>
@@ -224,10 +224,10 @@
           </svg>
         </div>
         <h3 class="empty-title\">
-          暂无登录账号
+          No accounts signed in
         </h3>
         <p class="empty-description">
-          登录 Apple ID 账号以开始使用
+          Sign in with an Apple ID to get started
         </p>
       </div>
     </div>
@@ -250,7 +250,7 @@ import {
 const emit = defineEmits(['accounts-updated'])
 
 const accounts = ref([])
-const savedCredentials = ref([]) // 保存的账号密码（仅邮箱）
+const savedCredentials = ref([]) // Saved credentials (email only)
 const accountIdentityKey = (acc = {}) => String(acc.email || acc.dsid || acc.token || '').trim().toLowerCase()
 const dedupeAccounts = (list = []) => {
 	const map = new Map()
@@ -268,18 +268,18 @@ const newAccount = ref({
 })
 const logging = ref(false)
 const autoLogging = ref(false)
-const savePassword = ref(true) // 默认保存密码
-const refreshingIndex = ref(null) // 正在刷新的账号索引
-const mfaRequired = ref(false) // 是否处于 MFA 等待状态
+const savePassword = ref(true) // Save password by default
+const refreshingIndex = ref(null) // Index of account being refreshed
+const mfaRequired = ref(false) // Whether waiting for MFA input
 
-// 表单验证
+// Form validation
 const isFormValid = computed(() => {
 	return newAccount.value.email && newAccount.value.password
 })
 
 const API_BASE = '/api'
 
-// 加载保存的凭证列表（仅邮箱）
+// Load saved credentials list (email only)
 const loadSavedCredentials = async () => {
 	try {
 		const response = await fetch(`${API_BASE}/credentials`, { credentials: 'include' })
@@ -294,7 +294,7 @@ const loadSavedCredentials = async () => {
 }
 
 const loadAccounts = async () => {
-	// 先从 localStorage 加载（用于显示）
+	// First load from localStorage (for display)
 	const saved = localStorage.getItem('ipa_accounts')
 	if (saved) {
 		try {
@@ -304,13 +304,13 @@ const loadAccounts = async () => {
 		}
 	}
 
-	// 然后从服务器获取最新的已登录账号列表
+		// Then fetch the latest logged-in account list from server
 	try {
 		const response = await fetch(`${API_BASE}/accounts`, { credentials: 'include' })
 		const data = await response.json()
 
 		if (data.ok && data.data && data.data.length > 0) {
-			// 同步服务器账号列表到本地
+			// Sync server account list to local
 			accounts.value = dedupeAccounts(data.data.map((acc) => ({
 				token: acc.token,
 				email: acc.email,
@@ -320,7 +320,7 @@ const loadAccounts = async () => {
 			})))
 			saveAccounts()
 		} else if (data.ok && (!data.data || data.data.length === 0)) {
-			// 服务端无已登录账号，尝试用保存的凭证自动恢复
+			// No accounts on server, attempt auto-restore with saved credentials
 			try {
 				const autoRes = await fetch(`${API_BASE}/auto-login`, { credentials: 'include', method: 'POST' })
 				const autoData = await autoRes.json()
@@ -355,16 +355,16 @@ const saveAccounts = () => {
 
 const loginAccount = async () => {
 	if (!newAccount.value.email || !newAccount.value.password) {
-		ElMessage.warning('请填写完整的账号信息')
+		ElMessage.warning('Please fill in all account information')
 		return
 	}
 
-	// 检查账号是否已存在
+	// Check if account already exists
 	const existingAccount = accounts.value.find(
 		(acc) => acc.email === newAccount.value.email,
 	)
 	if (existingAccount) {
-		ElMessage.warning('该账号已登录，无需重复登录')
+		ElMessage.warning('This account is already signed in')
 		return
 	}
 
@@ -389,7 +389,7 @@ const loginAccount = async () => {
 
 		// Network/server error
 		if (!response.ok && !data.ok) {
-			ElMessage.error(`登录失败：${data.error || '服务器错误'}`)
+			ElMessage.error(`Login failed: ${data.error || 'Server error'}`)
 			logging.value = false
 			return
 		}
@@ -399,7 +399,7 @@ const loginAccount = async () => {
 			mfaRequired.value = true
 			ElMessage({
 				type: 'warning',
-				message: '此账号需要二次验证，请查看你的受信任设备上的验证码，填入后再次点击登录',
+				message: 'This account requires two-factor authentication. Please check the verification code on your trusted device and click Sign In again',
 				duration: 8000,
 			})
 			logging.value = false
@@ -408,7 +408,7 @@ const loginAccount = async () => {
 
 		// MFA code was wrong/expired — keep the session, let user retry
 		if (data.ok && data.data?.status === 'mfa_failed') {
-			ElMessage.error('验证码无效或已过期，请重新输入')
+			ElMessage.error('Verification code is invalid or expired, please try again')
 			newAccount.value.code = ''
 			logging.value = false
 			return
@@ -416,10 +416,10 @@ const loginAccount = async () => {
 
 		// Business logic error (bad password, account locked, etc.)
 		if (!data.ok) {
-			const errMsg = data.error || '未知错误'
-			ElMessage.error(`登录失败：${errMsg}`)
+			const errMsg = data.error || 'Unknown error'
+			ElMessage.error(`Login failed: ${errMsg}`)
 			// If it looks like a credential error, hint about MFA
-			if (errMsg.includes('密码') || errMsg.includes('BadLogin')) {
+			if (errMsg.includes('password') || errMsg.includes('BadLogin')) {
 				mfaRequired.value = true
 			}
 			logging.value = false
@@ -439,27 +439,27 @@ const loginAccount = async () => {
 			}
 		])
 
-		// 更新保存的凭证列表
+		// Update saved credentials list
 		await loadSavedCredentials()
 
 		saveAccounts()
 
-		// 重置表单
+		// Reset form
 		newAccount.value = { email: '', password: '', code: '' }
 
-		ElMessage.success(`登录成功：${data.data.email}`)
+		ElMessage.success(`Signed in successfully: ${data.data.email}`)
 	} catch (error) {
-		ElMessage.error(`网络错误：${error.message}`)
+		ElMessage.error(`Network error: ${error.message}`)
 	} finally {
 		logging.value = false
 	}
 }
 
 const removeAccount = async (index) => {
-	if (confirm('确定要删除这个账号吗？')) {
+	if (confirm('Are you sure you want to delete this account?')) {
 		const account = accounts.value[index]
 
-		// 从服务器删除账号（会同时删除保存的凭证）
+		// Delete account from server (also removes saved credentials)
 		try {
 			const response = await fetch(`${API_BASE}/accounts/${account.token}`, {
 				credentials: 'include',
@@ -469,30 +469,30 @@ const removeAccount = async (index) => {
 			if (response.ok) {
 				accounts.value.splice(index, 1)
 				saveAccounts()
-				// 更新保存的凭证列表
+				// Update saved credentials list
 				await loadSavedCredentials()
 			} else {
-				ElMessage.warning('删除失败')
+				ElMessage.warning('Delete failed')
 			}
 		} catch (error) {
 			console.error('Failed to remove account:', error)
-			ElMessage.warning('删除失败')
+			ElMessage.warning('Delete failed')
 		}
 	}
 }
 
-// 刷新账号会话
+// Refresh account session
 const refreshAccount = async (index) => {
 	const account = accounts.value[index]
 	if (!account) return
 
 	if (!account.hasSavedCredentials) {
-		ElMessage.warning('这个账号没有保存密码，无法自动刷新。请重新登录并勾选“保存密码”。')
+		ElMessage.warning('This account has no saved password and cannot be auto-refreshed. Please sign in again and check "Save password".')
 		return
 	}
 
 	refreshingIndex.value = index
-	ElMessage.info(`检测到数据库已有账号，正在刷新 ${account.email} 的会话…`)
+	ElMessage.info(`Account detected in database, refreshing session for ${account.email}…`)
 
 	try {
 		const response = await fetch(`${API_BASE}/login/refresh`, {
@@ -507,27 +507,27 @@ const refreshAccount = async (index) => {
 		const data = await response.json()
 
 		if (data.ok) {
-			// 刷新账号列表以获取最新信息
+			// Refresh account list to get latest info
 			await loadSavedCredentials()
 			await loadAccounts()
-			ElMessage.success('账号会话已刷新，页面状态已自动同步')
+			ElMessage.success('Account session refreshed and page state synced')
 		} else {
-			const errMsg = data.error || '刷新失败'
-			if (errMsg.includes('未找到保存的密码')) {
-				ElMessage.error('刷新失败：这个账号没有保存密码。请重新登录并勾选“保存密码”。')
+			const errMsg = data.error || 'Refresh failed'
+			if (errMsg.includes('No saved password found')) {
+				ElMessage.error('Refresh failed: this account has no saved password. Please sign in again and check "Save password".')
 			} else {
-				ElMessage.error(`刷新失败: ${errMsg}`)
+				ElMessage.error(`Refresh failed: ${errMsg}`)
 			}
 		}
 	} catch (error) {
 		console.error('Failed to refresh account:', error)
-		ElMessage.warning('刷新失败，请检查网络连接')
+		ElMessage.warning('Refresh failed, please check your network connection')
 	} finally {
 		refreshingIndex.value = null
 	}
 }
 
-// 自动登录所有保存的账号
+// Auto-login all saved accounts
 const autoLoginAll = async () => {
 	if (savedCredentials.value.length === 0) return
 
@@ -547,7 +547,7 @@ const autoLoginAll = async () => {
 		if (data.ok && data.results) {
 			const { success, needCode, failed } = data.results
 
-			// 添加成功登录的账号
+			// Add successfully logged-in accounts
 			success.forEach((result) => {
 				if (!result.alreadyLoggedIn) {
 					accounts.value.push({
@@ -563,29 +563,29 @@ const autoLoginAll = async () => {
 			saveAccounts()
 			await loadAccounts()
 
-			// 显示自动登录结果
+			// Show auto-login results
 			if (success.length > 0 || needCode.length > 0 || failed.length > 0) {
 				let message = ''
 				if (success.length > 0) {
-					message += `成功登录 ${success.length} 个账号`
+					message += `Successfully signed in ${success.length} account(s)`
 				}
 				if (needCode.length > 0) {
 					if (message) message += '，'
-					message += `${needCode.length} 个账号需要验证码`
+					message += `${needCode.length} account(s) require verification code`
 				}
 				if (failed.length > 0) {
 					if (message) message += '，'
-					message += `${failed.length} 个账号登录失败`
+					message += `${failed.length} account(s) failed to sign in`
 				}
 
-				// 延迟显示，避免打扰用户
+				// Delay display to avoid interrupting user
 				setTimeout(() => {
 					if (
 						success.length > 0 &&
 						needCode.length === 0 &&
 						failed.length === 0
 					) {
-						// 全部成功，不显示提示
+						// All succeeded, no notification needed
 					} else {
 						ElMessage.info(message)
 					}
@@ -600,19 +600,19 @@ const autoLoginAll = async () => {
 }
 
 onMounted(async () => {
-	// 先加载保存的凭证列表
+	// First load saved credentials
 	await loadSavedCredentials()
 
-	// 加载已登录账号
+		// Load signed-in accounts
 	await loadAccounts()
 
-	// 尝试自动登录保存的账号
+	// Attempt to auto-login saved accounts
 	await autoLoginAll()
 
 	emit('accounts-updated', accounts.value)
 })
 
-// 获取区域标签
+// Get region label
 const getRegionLabel = (region) => {
 	const regionMap = {
 		US: '🇺🇸 US',
@@ -627,7 +627,7 @@ const getRegionLabel = (region) => {
 	return regionMap[region] || region
 }
 
-// 暴露账号列表供其他组件使用
+// Expose account list for other components
 defineExpose({
 	accounts,
 })
@@ -700,7 +700,7 @@ defineExpose({
 	gap: 24px;
 }
 
-/* 表单区域 */
+/* Form area */
 .form-section {
 	background: #ffffff;
 	border-radius: 16px;
@@ -798,7 +798,7 @@ defineExpose({
 	transform: translateY(0);
 }
 
-/* 账号列表区域 */
+/* Account list area */
 .accounts-section {
 	margin-bottom: 20px;
 	background: #ffffff;
@@ -1053,7 +1053,7 @@ defineExpose({
 	gap: 8px;
 }
 
-/* 空状态 */
+/* Empty state */
 .empty-state {
 	text-align: center;
 	padding: 48px 24px;
@@ -1094,7 +1094,7 @@ defineExpose({
 	color: #9ca3af;
 }
 
-/* 自动登录状态 */
+/* Auto-login status */
 .auto-login-status {
 	display: flex;
 	align-items: center;
@@ -1137,7 +1137,7 @@ defineExpose({
 	}
 }
 
-/* 保存密码复选框 */
+/* Save password checkbox */
 .save-password-checkbox {
 	margin-top: 4px;
 }
@@ -1160,7 +1160,7 @@ defineExpose({
 	color: #9ca3af;
 }
 
-/* MFA 高亮提示 */
+/* MFA highlight hint */
 .mfa-highlight :deep(.el-input__wrapper) {
 	box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.3) !important;
 	border-color: #f59e0b !important;
@@ -1177,7 +1177,7 @@ defineExpose({
 	color: #fbbf24;
 }
 
-/* 响应式设计 */
+/* Responsive design */
 @media (max-width: 640px) {
 	.account-header {
 		padding: 16px;

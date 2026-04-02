@@ -13,18 +13,18 @@
           </svg>
         </div>
         <div>
-          <h2 class="text-xl font-bold text-gray-900 dark:text-white">下载队列</h2>
-          <p class="text-sm text-gray-500 dark:text-gray-400">{{ currentTasks.length }} 个当前任务 · {{ records.length }} 条记录 · 已占用 {{ formatStorageM(totalStorageBytes) }}</p>
+          <h2 class="text-xl font-bold text-gray-900 dark:text-white">Download Queue</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400">{{ currentTasks.length }}  active tasks · {{ records.length }}  records · Storage used: {{ formatStorageM(totalStorageBytes) }}</p>
         </div>
       </div>
       <div class="flex gap-2">
-        <el-button size="small" plain @click="loadRecords">刷新</el-button>
-        <el-button size="small" type="warning" plain @click="cleanupServerFiles">清理服务器文件</el-button>
+        <el-button size="small" plain @click="loadRecords">Refresh</el-button>
+        <el-button size="small" type="warning" plain @click="cleanupServerFiles">Clean Server Files</el-button>
       </div>
     </div>
 
     <section v-if="currentTasks.length > 0" class="space-y-3">
-      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">当前任务</h3>
+      <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Active Tasks</h3>
       <div v-for="task in currentTasks" :key="task.id" class="queue-row">
         <AppArtwork :src="task.artworkUrl" :alt="task.appName" :label="task.appName" />
         <div class="row-main">
@@ -32,25 +32,25 @@
             <div class="min-w-0">
               <div class="row-title">{{ task.appName }}</div>
               <div class="row-meta">
-                <span>{{ task.artistName || '未知开发者' }}</span>
-                <span>版本 {{ task.version || '未知' }}</span>
-                <span>账号 {{ task.accountEmail || task.account?.email || '未知账号' }}</span>
+                <span>{{ task.artistName || 'Unknown Developer' }}</span>
+                <span>Version {{ task.version || 'Unknown' }}</span>
+                <span>Account {{ task.accountEmail || task.account?.email || 'Unknown Account' }}</span>
               </div>
             </div>
             <el-tag :type="statusTagType(task.status)" size="small">{{ statusLabel(task.status) }}</el-tag>
           </div>
           <div class="row-info">
-            <span v-if="task.fileSize">大小 {{ formatFileSize(task.fileSize) }}</span>
-            <span v-if="task.progress !== undefined">进度 {{ task.progress }}%</span>
-            <span v-if="task.stage">阶段 {{ task.stage }}</span>
+            <span v-if="task.fileSize">Size {{ formatFileSize(task.fileSize) }}</span>
+            <span v-if="task.progress !== undefined">Progress {{ task.progress }}%</span>
+            <span v-if="task.stage">Stage {{ task.stage }}</span>
           </div>
           <el-progress v-if="task.status !== 'completed' && task.status !== 'failed' && task.progress !== undefined" :percentage="task.progress" :stroke-width="6" />
           <div v-if="task.error" class="row-error">{{ task.error }}</div>
           <div class="row-actions">
-            <el-button v-if="task.status === 'completed' && task.downloadUrl" type="primary" size="small" @click="download(task.downloadUrl)">下载</el-button>
-            <el-button v-if="task.status === 'completed' && task.otaInstallable && task.installUrl" type="success" size="small" @click="install(task.installUrl)">安装</el-button>
-            <el-tag v-else-if="task.status === 'completed' && task.installMethod === 'download_only'" size="small" type="info">仅下载</el-tag>
-            <el-button size="small" type="danger" plain @click="removeTask(task.id)">{{ task.status === 'completed' || task.status === 'failed' ? '移除' : '取消' }}</el-button>
+            <el-button v-if="task.status === 'completed' && task.downloadUrl" type="primary" size="small" @click="download(task.downloadUrl)">Download</el-button>
+            <el-button v-if="task.status === 'completed' && task.otaInstallable && task.installUrl" type="success" size="small" @click="install(task.installUrl)">Install</el-button>
+            <el-tag v-else-if="task.status === 'completed' && task.installMethod === 'download_only'" size="small" type="info">Download Only</el-tag>
+            <el-button size="small" type="danger" plain @click="removeTask(task.id)">{{ task.status === 'completed' || task.status === 'failed' ? 'Remove' : 'Cancel' }}</el-button>
           </div>
         </div>
       </div>
@@ -58,41 +58,41 @@
 
     <section v-if="records.length > 0" class="space-y-3">
       <div class="flex items-center justify-between gap-3">
-        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">下载记录</h3>
-        <el-button size="small" type="danger" plain @click="clearAllRecords">清空记录</el-button>
+        <h3 class="text-lg font-semibold text-gray-900 dark:text-white">Download History</h3>
+        <el-button size="small" type="danger" plain @click="clearAllRecords">Clear History</el-button>
       </div>
       <div v-for="record in records" :key="record.id" class="queue-row">
         <AppArtwork :src="record.artworkUrl" :alt="record.appName" :label="record.appName || 'IPA'" />
         <div class="row-main">
           <div class="row-top">
             <div class="min-w-0">
-              <div class="row-title">{{ record.appName || '未命名 IPA' }}</div>
+              <div class="row-title">{{ record.appName || 'Unnamed IPA' }}</div>
               <div class="row-meta">
-                <span>{{ record.artistName || '未知开发者' }}</span>
-                <span>版本 {{ record.version || '未知' }}</span>
-                <span>账号 {{ record.accountEmail || '未知账号' }}</span>
+                <span>{{ record.artistName || 'Unknown Developer' }}</span>
+                <span>Version {{ record.version || 'Unknown' }}</span>
+                <span>Account {{ record.accountEmail || 'Unknown Account' }}</span>
               </div>
             </div>
             <el-tag :type="statusTagType(record.status)" size="small">{{ statusLabel(record.status) }}</el-tag>
           </div>
           <div class="row-info">
-            <span v-if="record.fileSize">大小 {{ formatFileSize(record.fileSize) }}</span>
+            <span v-if="record.fileSize">Size {{ formatFileSize(record.fileSize) }}</span>
             <span>{{ formatDate(record.downloadDate || record.createdAt) }}</span>
-            <span>{{ record.fileExists ? '文件在服务器' : '文件缺失' }}</span>
+            <span>{{ record.fileExists ? 'File on server' : 'File missing' }}</span>
           </div>
           <div v-if="record.error" class="row-error">{{ record.error }}</div>
           <div class="row-actions">
-            <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">下载</el-button>
+            <el-button v-if="record.downloadUrl && record.fileExists" type="primary" size="small" @click="download(record.downloadUrl)">Download</el-button>
 
-            <el-button v-if="record.fileExists && record.otaInstallable && record.installUrl" type="success" size="small" @click="install(record.installUrl)">安装</el-button>
+            <el-button v-if="record.fileExists && record.otaInstallable && record.installUrl" type="success" size="small" @click="install(record.installUrl)">Install</el-button>
             <el-tooltip v-else-if="record.fileExists && record.installMethod === 'download_only'" :content="record.inspection?.summary || ''" :disabled="!record.inspection?.summary" placement="top">
               <span>
-                <el-tag size="small" type="info">仅下载</el-tag>
+                <el-tag size="small" type="info">Download Only</el-tag>
               </span>
             </el-tooltip>
 
-            <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">清理安装包</el-button>
-            <el-button size="small" type="danger" plain @click="removeRecord(record.id)">删除记录</el-button>
+            <el-button v-if="record.fileExists" size="small" type="warning" plain @click="cleanupRecordFile(record)">Clean Package</el-button>
+            <el-button size="small" type="danger" plain @click="removeRecord(record.id)">Delete Record</el-button>
           </div>
         </div>
       </div>
@@ -102,8 +102,8 @@
       <svg class="mx-auto h-16 w-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
       </svg>
-      <p class="text-lg font-medium">暂无下载任务和记录</p>
-      <p class="text-sm mt-2">完成后可在这里查看状态与操作</p>
+      <p class="text-lg font-medium">No download tasks or records</p>
+      <p class="text-sm mt-2">Completed tasks will appear here</p>
     </div>
   </div>
 </template>
@@ -139,94 +139,94 @@ const loadRecords = async () => {
     if (data.ok) {
       records.value = data.data || []
     } else {
-      ElMessage.error(data.error || '加载记录失败')
+      ElMessage.error(data.error || 'Failed to load records')
     }
   } catch (error) {
     console.error('Failed to load download records:', error)
-    ElMessage.error('加载记录失败')
+    ElMessage.error('Failed to load records')
   }
 }
 
 const removeRecord = async (id) => {
   try {
-    await ElMessageBox.confirm('确定删除这条记录吗？', '确认删除', { type: 'warning' })
+    await ElMessageBox.confirm('Are you sure you want to delete this record?', 'Confirm Delete', { type: 'warning' })
     const response = await fetch(`${API_BASE}/download-records/${id}`, {
       method: 'DELETE',
       credentials: 'include'
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.error || '删除失败')
-    ElMessage.success('记录已删除')
+    if (!data.ok) throw new Error(data.error || 'Delete failed')
+    ElMessage.success('Record deleted')
     await loadRecords()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '删除失败')
+      ElMessage.error(error.message || 'Delete failed')
     }
   }
 }
 
 const clearAllRecords = async () => {
   try {
-    await ElMessageBox.confirm('确定清空全部下载记录吗？', '确认清空', {
+    await ElMessageBox.confirm('Are you sure you want to clear all download records?', 'Confirm Clear', {
       type: 'warning',
-      confirmButtonText: '清空',
-      cancelButtonText: '取消'
+      confirmButtonText: 'Clear',
+      cancelButtonText: 'Cancel'
     })
     const response = await fetch(`${API_BASE}/download-records`, {
       method: 'DELETE',
       credentials: 'include'
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.error || '清空失败')
-    ElMessage.success('记录已清空')
+    if (!data.ok) throw new Error(data.error || 'Failed to clear records')
+    ElMessage.success('Records cleared')
     await loadRecords()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '清空失败')
+      ElMessage.error(error.message || 'Failed to clear records')
     }
   }
 }
 
 const cleanupRecordFile = async (record) => {
   try {
-    await ElMessageBox.confirm(`确定清理 ${record.appName || record.filePath || '该安装包'} 吗？`, '确认清理', {
+    await ElMessageBox.confirm(`Are you sure you want to clean ${record.appName || record.filePath || 'this package'}?`, 'Confirm Cleanup', {
       type: 'warning',
-      confirmButtonText: '清理安装包',
-      cancelButtonText: '取消'
+      confirmButtonText: 'Clean Package',
+      cancelButtonText: 'Cancel'
     })
     const response = await fetch(`${API_BASE}/download-records/${record.id}/file`, {
       method: 'DELETE',
       credentials: 'include'
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.error || '清理失败')
-    ElMessage.success(`已清理 ${formatStorageM(data.data?.freed_bytes || 0)}`)
+    if (!data.ok) throw new Error(data.error || 'Cleanup failed')
+    ElMessage.success(`Cleaned ${formatStorageM(data.data?.freed_bytes || 0)}`)
     await loadRecords()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '清理失败')
+      ElMessage.error(error.message || 'Cleanup failed')
     }
   }
 }
 
 const cleanupServerFiles = async () => {
   try {
-    await ElMessageBox.confirm('确定清理服务器上的下载目录吗？', '确认清理', {
+    await ElMessageBox.confirm('Are you sure you want to clean the server download directory?', 'Confirm Cleanup', {
       type: 'warning',
-      confirmButtonText: '清理',
-      cancelButtonText: '取消'
+      confirmButtonText: 'Clean',
+      cancelButtonText: 'Cancel'
     })
     const response = await fetch(`${API_BASE}/cleanup-downloads`, {
       method: 'POST',
       credentials: 'include'
     })
     const data = await response.json()
-    if (!data.ok) throw new Error(data.error || '清理失败')
-    ElMessage.success(`已释放 ${formatFileSize(data.data?.freed_bytes || 0)}`)
+    if (!data.ok) throw new Error(data.error || 'Cleanup failed')
+    ElMessage.success(`Freed ${formatFileSize(data.data?.freed_bytes || 0)}`)
     await loadRecords()
   } catch (error) {
     if (error !== 'cancel') {
-      ElMessage.error(error.message || '清理失败')
+      ElMessage.error(error.message || 'Cleanup failed')
     }
   }
 }
@@ -241,7 +241,7 @@ const stopTaskPolling = (taskId) => {
   }
 }
 
-const markTaskInterrupted = (taskId, message = '任务已失效，可能是服务重启或页面切换后丢失，请重新发起下载') => {
+const markTaskInterrupted = (taskId, message = 'Task is no longer valid, possibly due to server restart or page navigation. Please re-initiate the download.') => {
   stopTaskPolling(taskId)
   appStore.updateQueueItem(taskId, {
     status: 'failed',
@@ -290,7 +290,7 @@ const pollTaskStatus = async (taskId) => {
     const data = await response.json()
     if (!response.ok || !data.ok || !data.data) {
       if (response.status >= 400) {
-        markTaskInterrupted(taskId, data?.error || '任务状态获取失败，请重新发起下载')
+        markTaskInterrupted(taskId, data?.error || 'Failed to get task status, please re-initiate the download')
       }
       return
     }
@@ -381,13 +381,13 @@ const statusTagType = (status) => {
 }
 
 const statusLabel = (status) => {
-  if (status === 'completed' || status === 'ready') return '已完成'
-  if (status === 'failed' || status === 'error') return '失败'
-  return '进行中'
+  if (status === 'completed' || status === 'ready') return 'Completed'
+  if (status === 'failed' || status === 'error') return 'Failed'
+  return 'In Progress'
 }
 
 const formatFileSize = (bytes) => {
-  if (!bytes) return '未知'
+  if (!bytes) return 'Unknown'
   const units = ['B', 'KB', 'MB', 'GB']
   let value = bytes
   let unitIndex = 0
@@ -401,10 +401,10 @@ const formatFileSize = (bytes) => {
 const formatStorageM = (bytes) => `${(Number(bytes || 0) / 1024 / 1024).toFixed(1)} M`
 
 const formatDate = (value) => {
-  if (!value) return '未知时间'
+  if (!value) return 'Unknown'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(undefined, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

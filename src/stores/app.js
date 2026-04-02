@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 export const useAppStore = defineStore('app', () => {
-  // 下载任务状态
+  // Download task state
   const downloadState = ref({
     selectedApp: null,
     appId: '',
@@ -17,19 +17,19 @@ export const useAppStore = defineStore('app', () => {
     progressLogs: ''
   })
 
-  // 下载任务队列
+  // Download task queue
   const taskQueue = ref([])
 
-  // 批量下载草稿项
+  // Batch download draft items
   const batchDraftItems = ref([])
 
-  // 当前激活的页面标签
+  // Currently active tab
   const activeTab = ref('download')
 
-  // 账号更新计数器
+  // Account update counter
   const accountsUpdateCounter = ref(0)
 
-  // 管理员登录态
+  // Admin login state
   const authState = ref({
     checked: false,
     loading: false,
@@ -76,7 +76,7 @@ export const useAppStore = defineStore('app', () => {
     })
 
     if (!res.ok) {
-      let msg = '登录失败'
+      let msg = 'Login failed'
       try {
         const json = await res.json()
         msg = json?.error || msg
@@ -101,7 +101,7 @@ export const useAppStore = defineStore('app', () => {
     authState.value.checked = true
   }
 
-  // 设置选中的应用
+  // Set selected app
   const setSelectedApp = (app) => {
     downloadState.value.selectedApp = app
     if (app && app.trackId) {
@@ -109,26 +109,26 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 更新下载状态
+  // Update download state
   const updateDownloadState = (key, value) => {
     if (key in downloadState.value) {
       downloadState.value[key] = value
     }
   }
 
-  // 添加任务到队列
+  // Add task to queue
   const addToQueue = (item) => {
     const existingIndex = taskQueue.value.findIndex(q => q.id === item.id)
     if (existingIndex >= 0) {
-      // 更新现有任务
+      // Update existing task
       taskQueue.value[existingIndex] = { ...taskQueue.value[existingIndex], ...item }
     } else {
-      // 添加新任务
+      // Add new task
       taskQueue.value.push(item)
     }
   }
 
-  // 更新队列任务
+  // Update queue task
   const updateQueueItem = (id, updates) => {
     const index = taskQueue.value.findIndex(q => q.id === id)
     if (index >= 0) {
@@ -136,7 +136,7 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 从队列移除任务
+  // Remove task from queue
   const removeFromQueue = (idOrIndex) => {
     if (typeof idOrIndex === 'number' && idOrIndex >= 0 && idOrIndex < taskQueue.value.length) {
       taskQueue.value.splice(idOrIndex, 1)
@@ -149,12 +149,12 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  // 清空任务队列
+  // Clear task queue
   const clearQueue = () => {
     taskQueue.value = []
   }
 
-  // 添加批量下载草稿项
+  // Add batch download draft item
   const addBatchDraftItem = (item) => {
     const key = `${item.app_id}:${item.version || 'latest'}:${item.account_email}`
     const existingIndex = batchDraftItems.value.findIndex(
@@ -178,7 +178,7 @@ export const useAppStore = defineStore('app', () => {
     batchDraftItems.value = []
   }
 
-  // 触发账号更新
+  // Trigger account update
   const triggerAccountsUpdate = () => {
     accountsUpdateCounter.value++
   }
