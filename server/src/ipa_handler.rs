@@ -208,14 +208,14 @@ pub fn sanitize_ipa_filename(name: &str) -> String {
 
     // Filename truncation: preserve the ".ipa" extension and @bundle_id suffix, truncate the middle
     let extension = ".ipa";
-    let bundle_id_suffix = cleaned.rfind('@').and_then(|pos| Some(&cleaned[pos..]));
+    let bundle_id_suffix = cleaned.rfind('@').map(|pos| &cleaned[pos..]);
     let base_len = if let Some(suffix) = bundle_id_suffix {
         cleaned.len() - suffix.len()
     } else {
         cleaned.len() - extension.len()
     };
 
-    if base_len <= 0 {
+    if base_len == 0 {
         return format!("download_{}.ipa", hex::encode(&cleaned.as_bytes()[..8]));
     }
 
