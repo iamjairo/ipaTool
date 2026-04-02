@@ -37,5 +37,5 @@ chrono = { version = "0.4.38", features = ["serde"] }
 lazy_static = "1.4"
 urlencoding = "2.1"
 
-# 锁定 time crate 版本，避免 edition2024 问题
+# Pin the time crate version to avoid edition2024 compatibility issues
 time = { version = "=0.3.36", features = ["serde"] }

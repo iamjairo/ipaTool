@@ -110,7 +110,7 @@ impl Database {
 
         let connection = Connection::open(path)?;
 
-        // PRAGMA 语句使用 query_row 而不是 execute
+        // PRAGMA statements use query_row instead of execute
         let _ = connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
             row.get::<_, String>(0)
         });
@@ -323,7 +323,7 @@ impl Database {
             );
         }
 
-        // 账号唯一性：按 email 收口，只保留最新一条，避免 token 变了后产生重复账号。
+        // Account uniqueness: deduplicate by email, keeping only the latest record to avoid duplicates when the token changes.
         let _ = conn.execute(
             "DELETE FROM accounts
              WHERE id NOT IN (
@@ -1229,7 +1229,7 @@ impl Database {
         Ok(())
     }
 
-    // 订阅相关方法
+    // Subscription-related methods
     pub fn add_subscription(&self, subscription: &NewSubscription<'_>) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
         conn.execute(
@@ -1299,7 +1299,7 @@ impl Database {
         Ok(())
     }
 
-    // 批量下载相关方法
+    // Batch download methods
     pub fn create_batch_task(&self, task_name: &str, total_count: i64) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
         conn.execute(

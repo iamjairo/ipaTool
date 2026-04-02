@@ -450,7 +450,7 @@ impl Store {
                 );
                 redirect_failure.insert(
                     "customerMessage".to_string(),
-                    Value::String("Apple 登录重定向异常，请重新开始登录流程".to_string()),
+                    Value::String("Apple login redirect error, please restart the login flow".to_string()),
                 );
                 return Ok(redirect_failure);
             }
@@ -481,7 +481,7 @@ impl Store {
                     );
                     m.insert(
                         "customerMessage".to_string(),
-                        Value::String("无法解析 Apple 的响应，请稍后重试".to_string()),
+                        Value::String("Failed to parse Apple's response, please try again later".to_string()),
                     );
                     return Ok(m);
                 }
@@ -714,7 +714,7 @@ impl AccountStore {
             .authenticate(&self.account_email, password, mfa)
             .await?;
 
-        // 提取认证信息
+        // Extract authentication info
         if result.get("_state").and_then(|v| v.as_str()) == Some("success") {
             let auth_info = AuthInfo {
                 ds_person_id: result

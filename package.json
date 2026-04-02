@@ -6,8 +6,12 @@
   "scripts": {
     "dev": "vite",
     "dev:rust": "./dev-rust.sh",
+    "start": "concurrently --names \"server,frontend\" --prefix-colors \"cyan,green\" \"./dev-rust.sh\" \"vite\"",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "build": "vite build",
     "build:rust": "./build-rust.sh",
+    "build:all": "./build-rust.sh && vite build",
     "preview": "vite preview",
     "version:sync": "./sync-version.sh",
     "version:patch": "npm version patch && ./sync-version.sh",
@@ -27,8 +31,10 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tauri-apps/cli": "^2.10.1",
     "@vitejs/plugin-vue": "^5.2.1",
     "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
     "eslint": "^10.1.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-vue": "^10.8.0",

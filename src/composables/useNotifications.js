@@ -59,7 +59,7 @@ async function _checkForUpdates() {
     if (data.ok && data.data?.updates?.length > 0) {
       for (const update of data.data.updates) {
         send(
-          `🔄 ${update.app_name} 有新版本`,
+          `🔄 ${update.app_name} has a new version`,
           `${update.current_version} → ${update.latest_version}`,
           { tag: `version-${update.app_id}` }
         )
@@ -152,7 +152,7 @@ function init() {
 function notifyDownloadComplete(appName, fileName) {
   if (!settings.value.downloadComplete) return
   send(
-    `✅ 下载完成`,
+    `✅ Download Complete`,
     `${appName}${fileName ? ` — ${fileName}` : ''}`,
     { tag: `dl-complete-${Date.now()}` }
   )
@@ -161,7 +161,7 @@ function notifyDownloadComplete(appName, fileName) {
 function notifyDownloadFailed(appName, error) {
   if (!settings.value.downloadFailed) return
   send(
-    `❌ 下载失败`,
+    `❌ Download Failed`,
     `${appName}${error ? `：${error}` : ''}`,
     { tag: `dl-failed-${Date.now()}` }
   )
@@ -170,7 +170,7 @@ function notifyDownloadFailed(appName, error) {
 function notifyVersionUpdate(appName, fromVersion, toVersion) {
   if (!settings.value.versionUpdate) return
   send(
-    `🔄 发现新版本`,
+    `🔄 New Version Found`,
     `${appName}：${fromVersion} → ${toVersion}`,
     { tag: `version-${appName}` }
   )

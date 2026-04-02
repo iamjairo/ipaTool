@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "IPA Tool",
+  "version": "1.0.5",
+  "identifier": "com.iamjairo.ipatool",
+  "build": {
+    "beforeDevCommand": "pnpm start",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "pnpm build:all",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "IPA Tool",
+        "width": 1280,
+        "height": 800,
+        "url": "http://localhost:8080",
+        "resizable": true,
+        "decorations": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

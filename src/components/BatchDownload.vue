@@ -19,10 +19,10 @@
         </div>
         <div class="flex-shrink-0">
           <h2 class="text-xl font-bold text-gray-900 dark:text-white">
-            批量下载
+            Batch Download
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400">
-            {{ tasks.length }} 个批量任务
+            {{ tasks.length }}  batch tasks
           </p>
         </div>
       </div>
@@ -32,18 +32,18 @@
           :icon="Plus"
           @click="showCreateDialog = true"
         >
-          创建批量下载
+          Create Batch Download
         </el-button>
         <el-button
           :icon="Refresh"
           @click="loadTasks"
         >
-          刷新
+          Refresh
         </el-button>
       </div>
     </div>
 
-    <!-- 批量任务列表 -->
+    <!-- Batch Task List -->
     <div v-if="tasks.length > 0">
       <el-space
         direction="vertical"
@@ -66,18 +66,18 @@
                   :type="task.status === 'completed' ? 'success' : task.status === 'failed' ? 'danger' : 'warning'"
                   size="small"
                 >
-                  {{ task.status === 'completed' ? '已完成' : task.status === 'failed' ? '失败' : '进行中' }}
+                  {{ task.status === 'completed' ? 'Completed' : task.status === 'failed' ? 'Failed' : 'In Progress' }}
                 </el-tag>
               </div>
 
               <div class="flex items-center gap-6 text-sm text-gray-500 dark:text-gray-400 mb-3">
-                <span>总数: {{ task.total_count }}</span>
-                <span>完成: {{ task.completed_count }}</span>
-                <span>失败: {{ task.failed_count }}</span>
+                <span>Total: {{ task.total_count }}</span>
+                <span>Completed: {{ task.completed_count }}</span>
+                <span>Failed: {{ task.failed_count }}</span>
                 <span v-if="task.created_at">{{ formatDate(task.created_at) }}</span>
               </div>
 
-              <!-- 进度条 -->
+              <!-- Progress bar -->
               <div
                 v-if="task.status !== 'completed'"
                 class="mb-3"
@@ -88,7 +88,7 @@
                 />
               </div>
 
-              <!-- 操作按钮 -->
+              <!-- Action buttons -->
               <div class="flex items-center gap-2">
                 <el-button
                   type="primary"
@@ -96,7 +96,7 @@
                   :icon="View"
                   @click="viewDetails(task)"
                 >
-                  查看详情
+                  View Details
                 </el-button>
                 <el-button
                   type="danger"
@@ -105,7 +105,7 @@
                   plain
                   @click="deleteTask(task.id)"
                 >
-                  删除
+                  Delete
                 </el-button>
               </div>
             </div>
@@ -114,7 +114,7 @@
       </el-space>
     </div>
 
-    <!-- 空状态 -->
+    <!-- Empty State -->
     <div
       v-else
       class="text-center py-12 text-gray-500 dark:text-gray-400"
@@ -133,17 +133,17 @@
         />
       </svg>
       <p class="text-lg font-medium">
-        暂无批量下载任务
+        No batch download tasks
       </p>
       <p class="text-sm mt-2">
-        点击"创建批量下载"开始批量下载应用
+        Click "Create Batch Download" to start downloading apps in bulk
       </p>
     </div>
 
-    <!-- 创建批量下载对话框 -->
+    <!-- Create Batch Download Dialog -->
     <el-dialog
       v-model="showCreateDialog"
-      title="创建批量下载"
+      title="Create Batch Download"
       width="500px"
       :close-on-click-modal="false"
     >
@@ -151,15 +151,15 @@
         :model="createForm"
         label-width="100px"
       >
-        <el-form-item label="任务名称">
+        <el-form-item label="Task Name">
           <el-input
             v-model="createForm.taskName"
-            placeholder="输入任务名称"
+            placeholder="Enter task name"
           />
         </el-form-item>
-        <el-form-item label="应用列表">
+        <el-form-item label="App List">
           <div class="text-sm text-gray-500 mb-2">
-            在下载页选择账号、APPID 和版本后，点击"添加到批量下载"
+            Select an account, App ID and version on the Download page, then click "Add to Batch Download"
           </div>
           <div
             v-if="draftItems.length > 0"
@@ -177,10 +177,10 @@
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
                   App ID: {{ item.app_id }}
                   <span class="mx-1">|</span>
-                  账号: {{ item.account_email }}
+                  Account: {{ item.account_email }}
                 </p>
                 <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                  版本: {{ item.version_label || item.version || '最新版本' }}
+                  Version: {{ item.version_label || item.version || 'Latest Version' }}
                 </p>
               </div>
               <el-button
@@ -189,7 +189,7 @@
                 plain
                 @click="removeDraftItem(index)"
               >
-                移除
+                Remove
               </el-button>
             </div>
             <div class="flex justify-end">
@@ -198,7 +198,7 @@
                 plain
                 @click="clearDraftItems"
               >
-                清空草稿
+                Clear Drafts
               </el-button>
             </div>
           </div>
@@ -206,29 +206,29 @@
             v-else
             class="text-sm text-gray-400"
           >
-            还没有批量下载草稿项
+No batch download draft items yet
           </div>
         </el-form-item>
       </el-form>
 
       <template #footer>
         <el-button @click="showCreateDialog = false">
-          取消
+          Cancel
         </el-button>
         <el-button
           type="primary"
           :loading="creating"
           @click="createBatchTask"
         >
-          创建
+          Create
         </el-button>
       </template>
     </el-dialog>
 
-    <!-- 任务详情对话框 -->
+    <!-- Task Details Dialog -->
     <el-dialog
       v-model="showDetailsDialog"
-      title="批量下载详情"
+      title="Batch Download Details"
       width="800px"
     >
       <div v-if="currentTask">
@@ -237,15 +237,15 @@
             {{ currentTask.task_name }}
           </h3>
           <div class="flex items-center gap-4 text-sm text-gray-500">
-            <span>总数: {{ currentTask.total_count }}</span>
-            <span>完成: {{ currentTask.completed_count }}</span>
-            <span>失败: {{ currentTask.failed_count }}</span>
+            <span>Total: {{ currentTask.total_count }}</span>
+            <span>Completed: {{ currentTask.completed_count }}</span>
+            <span>Failed: {{ currentTask.failed_count }}</span>
           </div>
         </div>
 
         <div v-if="taskItems.length > 0">
           <h4 class="font-semibold mb-3">
-            下载项目
+            Download Items
           </h4>
           <el-space
             direction="vertical"
@@ -263,7 +263,7 @@
                     {{ item.app_name || item.app_id }}
                   </p>
                   <p class="text-sm text-gray-500">
-                    版本: {{ item.version || '未知' }} | 账号: {{ item.account_email }}
+                    Version: {{ item.version || 'Unknown' }} | Account: {{ item.account_email }}
                   </p>
                 </div>
                 <div class="text-right">
@@ -271,7 +271,7 @@
                     :type="item.status === 'completed' ? 'success' : item.status === 'failed' ? 'danger' : 'warning'"
                     size="small"
                   >
-                    {{ item.status === 'completed' ? '已完成' : item.status === 'failed' ? '失败' : '进行中' }}
+                    {{ item.status === 'completed' ? 'Completed' : item.status === 'failed' ? 'Failed' : 'In Progress' }}
                   </el-tag>
                   <p
                     v-if="item.progress > 0"
@@ -294,7 +294,7 @@
 
       <template #footer>
         <el-button @click="showDetailsDialog = false">
-          关闭
+          Close
         </el-button>
       </template>
     </el-dialog>
@@ -324,7 +324,7 @@ const createForm = ref({
 
 const draftItems = computed(() => appStore.batchDraftItems)
 
-// 加载批量任务
+// Load batch tasks
 const loadTasks = async () => {
   try {
     const response = await fetch(`${API_BASE}/batch-tasks`, { credentials: 'include' })
@@ -334,11 +334,11 @@ const loadTasks = async () => {
     }
   } catch (error) {
     console.error('Failed to load batch tasks:', error)
-    ElMessage.error('加载批量任务失败')
+    ElMessage.error('Failed to load batch tasks')
   }
 }
 
-// 创建批量任务
+// Create batch task
 const removeDraftItem = (index) => {
   appStore.removeBatchDraftItem(index)
 }
@@ -349,12 +349,12 @@ const clearDraftItems = () => {
 
 const createBatchTask = async () => {
   if (!createForm.value.taskName) {
-    ElMessage.warning('请输入任务名称')
+    ElMessage.warning('Please enter a task name')
     return
   }
 
   if (draftItems.value.length === 0) {
-    ElMessage.warning('请先从下载页添加至少一个批量下载项')
+    ElMessage.warning('Please add at least one item from the Download page first')
     return
   }
 
@@ -377,23 +377,23 @@ const createBatchTask = async () => {
     const data = await response.json()
 
     if (data.ok) {
-      ElMessage.success('批量任务创建成功')
+      ElMessage.success('Batch task created successfully')
       showCreateDialog.value = false
       createForm.value.taskName = ''
       appStore.clearBatchDraftItems()
       await loadTasks()
     } else {
-      ElMessage.error(data.error || '创建批量任务失败')
+      ElMessage.error(data.error || 'Failed to create batch task')
     }
   } catch (error) {
     console.error('Failed to create batch task:', error)
-    ElMessage.error('创建批量任务失败')
+    ElMessage.error('Failed to create batch task')
   } finally {
     creating.value = false
   }
 }
 
-// 查看任务详情
+// View task details
 const viewDetails = async (task) => {
   currentTask.value = task
   try {
@@ -405,14 +405,14 @@ const viewDetails = async (task) => {
     showDetailsDialog.value = true
   } catch (error) {
     console.error('Failed to load task details:', error)
-    ElMessage.error('加载任务详情失败')
+    ElMessage.error('Failed to load task details')
   }
 }
 
-// 删除任务
+// Delete task
 const deleteTask = async (id) => {
   try {
-    await ElMessageBox.confirm('确定要删除这个批量任务吗？', '确认删除', {
+    await ElMessageBox.confirm('Are you sure you want to delete this batch task?', 'Confirm Delete', {
       type: 'warning'
     })
 
@@ -423,30 +423,30 @@ const deleteTask = async (id) => {
     const data = await response.json()
 
     if (data.ok) {
-      ElMessage.success('删除成功')
+      ElMessage.success('Deleted successfully')
       await loadTasks()
     } else {
-      ElMessage.error(data.error || '删除失败')
+      ElMessage.error(data.error || 'Delete failed')
     }
   } catch (error) {
     if (error !== 'cancel') {
       console.error('Failed to delete task:', error)
-      ElMessage.error('删除失败')
+      ElMessage.error('Delete failed')
     }
   }
 }
 
-// 计算进度
+// Calculate progress
 const calculateProgress = (task) => {
   if (task.total_count === 0) return 0
   return Math.round((task.completed_count / task.total_count) * 100)
 }
 
-// 格式化日期
+// Format date
 const formatDate = (dateString) => {
   if (!dateString) return ''
   const date = new Date(dateString)
-  return date.toLocaleString('zh-CN')
+  return date.toLocaleString()
 }
 
 onMounted(() => {

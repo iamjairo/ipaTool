@@ -32,7 +32,7 @@
     box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   }
   
-  /* 移动端安全区域适配 */
+  /* Mobile safe area adaptation */
   .pb-safe {
     padding-bottom: env(safe-area-inset-bottom, 20px);
   }
@@ -48,7 +48,7 @@
   }
 }
 
-/* Element Plus 暗黑模式优化 */
+/* Element Plus dark mode optimization */
 .dark {
   --el-bg-color: #1f2937;
   --el-bg-color-overlay: #111827;
@@ -86,7 +86,7 @@
   --el-color-info: #6b7280;
 }
 
-/* Element Plus 组件暗黑模式优化 */
+/* Element Plus component dark mode optimization */
 .dark .el-card {
   background-color: rgba(31, 41, 55, 0.8) !important;
   border-color: rgba(55, 65, 81, 0.5) !important;
@@ -332,7 +332,7 @@
   color: #9ca3af !important;
 }
 
-/* 下拉菜单暗黑模式 */
+/* Dropdown menu dark mode */
 .dark .el-select-dropdown {
   background-color: rgba(31, 41, 55, 0.95) !important;
   border-color: rgba(55, 65, 81, 0.5) !important;
@@ -351,7 +351,7 @@
   background-color: rgba(59, 130, 246, 0.1) !important;
 }
 
-/* 弹窗暗黑模式 */
+/* Dialog dark mode */
 .dark .el-overlay {
   background-color: rgba(2, 6, 23, 0.72) !important;
 }
@@ -448,7 +448,7 @@
   border-color: rgba(75, 85, 99, 0.9) !important;
 }
 
-/* 消息提示暗黑模式 */
+/* Message notification dark mode */
 .dark .el-message {
   background-color: rgba(17, 24, 39, 0.98) !important;
   border: 1px solid rgba(75, 85, 99, 0.9) !important;
@@ -513,7 +513,7 @@
   color: #f8fafc !important;
 }
 
-/* 加载动画暗黑模式 */
+/* Loading animation dark mode */
 .dark .el-loading-mask {
   background-color: rgba(0, 0, 0, 0.7) !important;
 }
@@ -526,7 +526,7 @@
   color: #e5e7eb !important;
 }
 
-/* Element Plus 组件暗黑模式优化 */
+/* Element Plus component dark mode optimization */
 .dark .el-card {
   background-color: rgba(31, 41, 55, 0.8);
   border-color: rgba(55, 65, 81, 0.5);

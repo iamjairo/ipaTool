@@ -170,7 +170,7 @@ impl JobHandle {
                     percent: state.progress,
                     downloaded: None,
                     total: None,
-                    message: Some("任务完成".to_string()),
+                    message: Some("Task completed".to_string()),
                 }),
                 error: None,
             }

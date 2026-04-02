@@ -1,23 +1,23 @@
 use plist::{Dictionary, Value, XmlWriteOptions};
 use serde::Deserialize;
 
-/// OTA 安装参数
+/// OTA installation parameters
 #[derive(Debug, Deserialize)]
 pub struct InstallQuery {
-    /// manifest URL - plist 文件的 URL
+    /// manifest URL - URL of the plist file
     pub manifest: String,
 }
 
-/// 生成 plist 清单文件
+/// Generate a plist manifest file
 ///
-/// 用于 iOS OTA 安装，包含应用下载链接和元数据
+/// Used for iOS OTA installation, contains the app download URL and metadata
 pub fn generate_plist(
     url: String,
     bundle_identifier: String,
     bundle_version: String,
     title: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // iOS OTA manifest 需要标准结构：items -> [ { assets, metadata } ]
+    // iOS OTA manifest requires the standard structure: items -> [ { assets, metadata } ]
     let mut root = Dictionary::new();
 
     let mut asset = Dictionary::new();
@@ -47,22 +47,22 @@ pub fn generate_plist(
     Ok(plist_string)
 }
 
-/// 生成 iOS 安装描述文件（.mobileconfig）
+/// Generate an iOS installation configuration file (.mobileconfig)
 ///
-/// .mobileconfig 文件包含一个 URL，指向 itms-services:// 协议
-/// 该协议会打开 plist 文件，触发 OTA 安装
+/// The .mobileconfig file contains a URL pointing to the itms-services:// protocol
+/// This protocol opens the plist file and triggers the OTA installation
 pub fn generate_mobileconfig(
     manifest_url: String,
     display_name: String,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // 构建 itms-services URL
+    // Build the itms-services URL
     let encoded_manifest_url = urlencoding::encode(&manifest_url);
     let itms_url = format!(
         "itms-services://?action=download-manifest&url={}",
         encoded_manifest_url
     );
 
-    // 创建 mobileconfig 的 Payload 数据结构
+    // Create the Payload data structure for the mobileconfig
     let mut content_dict = Dictionary::new();
     content_dict.insert("URL".into(), Value::String(itms_url));
 
@@ -84,7 +84,7 @@ pub fn generate_mobileconfig(
     );
     payload_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
-    // 外层
+    // Outer container
     let mut mobileconfig_dict = Dictionary::new();
     mobileconfig_dict.insert("PayloadContent".into(), Value::Dictionary(payload_dict));
     mobileconfig_dict.insert(
@@ -108,7 +108,7 @@ pub fn generate_mobileconfig(
     );
     mobileconfig_dict.insert("PayloadVersion".into(), Value::Integer(1.into()));
 
-    // 生成 mobileconfig XML 字符串
+    // Generate the mobileconfig XML string
     let mobileconfig_value = Value::Dictionary(mobileconfig_dict);
     let mut mobileconfig_bytes = Vec::new();
     plist::to_writer_xml_with_options(

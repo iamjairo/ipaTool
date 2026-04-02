@@ -4,10 +4,10 @@
       <div class="glass-card p-6 border border-gray-200/50 dark:border-gray-700/50">
         <div class="mb-6">
           <h2 class="text-xl font-semibold text-gray-900 dark:text-white">
-            管理员登录
+            Admin Login
           </h2>
           <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            默认账号：admin / admin
+            Default credentials: admin / admin
           </p>
         </div>
 
@@ -18,20 +18,20 @@
           label-position="top"
         >
           <el-form-item
-            label="用户名"
+            label="Username"
             prop="username"
           >
             <el-input
               v-model="loginForm.username"
               autocomplete="username"
-              placeholder="请输入用户名"
+              placeholder="Please enter username"
               size="large"
               @keyup.enter="handleLogin"
             />
           </el-form-item>
 
           <el-form-item
-            label="密码"
+            label="Password"
             prop="password"
           >
             <el-input
@@ -39,7 +39,7 @@
               type="password"
               show-password
               autocomplete="current-password"
-              placeholder="请输入密码"
+              placeholder="Please enter password"
               size="large"
               @keyup.enter="handleLogin"
             />
@@ -52,7 +52,7 @@
             :loading="loginLoading"
             @click="handleLogin"
           >
-            登录
+            Sign In
           </el-button>
         </el-form>
 
@@ -64,14 +64,14 @@
             type="warning"
             show-icon
             :closable="false"
-            title="检测到仍在使用默认密码，必须先修改密码后才能进入系统"
+            title="Default password detected, you must change your password before continuing"
           />
         </div>
       </div>
 
       <el-dialog
         v-model="showChangePassword"
-        title="首次登录：请修改用户名和密码"
+        title="First Login: Please update your username and password"
         width="420px"
         :close-on-click-modal="false"
         :close-on-press-escape="false"
@@ -85,18 +85,18 @@
           label-position="top"
         >
           <el-form-item
-            label="新用户名"
+            label="New Username"
             prop="new_username"
           >
             <el-input
               v-model="pwdForm.new_username"
               autocomplete="off"
-              placeholder="请输入新用户名"
+              placeholder="Please enter new username"
               @keyup.enter="handleChangePassword"
             />
           </el-form-item>
           <el-form-item
-            label="当前密码"
+            label="Current Password"
             prop="current_password"
           >
             <el-input
@@ -104,13 +104,13 @@
               type="password"
               show-password
               autocomplete="current-password"
-              placeholder="请输入当前密码"
+              placeholder="Please enter current password"
               @keyup.enter="handleChangePassword"
             />
           </el-form-item>
 
           <el-form-item
-            label="新密码"
+            label="New Password"
             prop="new_password"
           >
             <el-input
@@ -118,13 +118,13 @@
               type="password"
               show-password
               autocomplete="new-password"
-              placeholder="请输入新密码"
+              placeholder="Please enter new password"
               @keyup.enter="handleChangePassword"
             />
           </el-form-item>
 
           <el-form-item
-            label="确认新密码"
+            label="Confirm New Password"
             prop="confirm_password"
           >
             <el-input
@@ -132,7 +132,7 @@
               type="password"
               show-password
               autocomplete="new-password"
-              placeholder="请再次输入新密码"
+              placeholder="Please confirm new password"
               @keyup.enter="handleChangePassword"
             />
           </el-form-item>
@@ -144,7 +144,7 @@
             :loading="pwdLoading"
             @click="handleChangePassword"
           >
-            修改密码
+            Change Password
           </el-button>
         </template>
       </el-dialog>
@@ -169,8 +169,8 @@ const loginForm = reactive({
 })
 
 const loginRules = {
-  username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
-  password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
+  username: [{ required: true, message: 'Please enter username', trigger: 'blur' }],
+  password: [{ required: true, message: 'Please enter password', trigger: 'blur' }]
 }
 
 const showChangePassword = ref(false)
@@ -185,14 +185,14 @@ const pwdForm = reactive({
 })
 
 const pwdRules = {
-  current_password: [{ required: true, message: '请输入当前密码', trigger: 'blur' }],
-  new_password: [{ required: true, message: '请输入新密码', trigger: 'blur' }],
+  current_password: [{ required: true, message: 'Please enter current password', trigger: 'blur' }],
+  new_password: [{ required: true, message: 'Please enter new password', trigger: 'blur' }],
   confirm_password: [
-    { required: true, message: '请确认新密码', trigger: 'blur' },
+    { required: true, message: 'Please confirm new password', trigger: 'blur' },
     {
       validator: (_, value, callback) => {
         if (value !== pwdForm.new_password) {
-          callback(new Error('两次输入的新密码不一致'))
+          callback(new Error('New passwords do not match'))
         } else {
           callback()
         }
@@ -226,11 +226,11 @@ const handleLogin = async () => {
       pwdForm.current_password = loginForm.password
       pwdForm.new_username = ''
     } else {
-      ElMessage.success('登录成功')
+      ElMessage.success('Login successful')
       emit('login-success')
     }
   } catch (e) {
-    ElMessage.error(e?.message || '登录失败')
+    ElMessage.error(e?.message || 'Login failed')
   } finally {
     loginLoading.value = false
   }
@@ -258,7 +258,7 @@ const handleChangePassword = async () => {
     })
 
     if (!res.ok) {
-      let msg = '修改密码失败'
+      let msg = 'Failed to change password'
       try {
         const json = await res.json()
         msg = json?.error || msg
@@ -268,7 +268,7 @@ const handleChangePassword = async () => {
 
     const json = await res.json()
 
-    ElMessage.success('密码修改成功，请使用新密码重新登录')
+    ElMessage.success('Password changed successfully, please log in with your new password')
     showChangePassword.value = false
 
     // Clear form
@@ -285,7 +285,7 @@ const handleChangePassword = async () => {
     // the user sees a blank/broken state instead of the login form.
     window.location.reload()
   } catch (e) {
-    ElMessage.error(e?.message || '修改密码失败')
+    ElMessage.error(e?.message || 'Failed to change password')
   } finally {
     pwdLoading.value = false
   }
