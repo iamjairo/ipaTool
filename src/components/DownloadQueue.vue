@@ -26,12 +26,16 @@
     <section v-if="queue.length > 0" class="space-y-3">
       <h3 class="text-lg font-semibold text-gray-900 dark:text-white">当前任务</h3>
       <div v-for="task in queue" :key="task.id" class="queue-row">
-        <img :src="task.artworkUrl || 'https://via.placeholder.com/56'" :alt="task.appName" class="row-artwork">
+        <AppArtwork :src="task.artworkUrl" :alt="task.appName" :label="task.appName" />
         <div class="row-main">
           <div class="row-top">
             <div class="min-w-0">
               <div class="row-title">{{ task.appName }}</div>
-              <div class="row-meta">{{ task.artistName || '未知开发者' }} · 版本 {{ task.version || '未知' }}</div>
+              <div class="row-meta">
+                <span>{{ task.artistName || '未知开发者' }}</span>
+                <span>版本 {{ task.version || '未知' }}</span>
+                <span>账号 {{ task.accountEmail || task.account?.email || '未知账号' }}</span>
+              </div>
             </div>
             <el-tag :type="statusTagType(task.status)" size="small">{{ statusLabel(task.status) }}</el-tag>
           </div>
@@ -57,12 +61,16 @@
         <el-button size="small" type="danger" plain @click="clearAllRecords">清空记录</el-button>
       </div>
       <div v-for="record in records" :key="record.id" class="queue-row">
-        <img :src="record.artworkUrl || 'https://via.placeholder.com/56'" :alt="record.appName" class="row-artwork">
+        <AppArtwork :src="record.artworkUrl" :alt="record.appName" :label="record.appName || 'IPA'" />
         <div class="row-main">
           <div class="row-top">
             <div class="min-w-0">
               <div class="row-title">{{ record.appName || '未命名 IPA' }}</div>
-              <div class="row-meta">{{ record.artistName || record.accountEmail || '未知来源' }} · 版本 {{ record.version || '未知' }}</div>
+              <div class="row-meta">
+                <span>{{ record.artistName || '未知开发者' }}</span>
+                <span>版本 {{ record.version || '未知' }}</span>
+                <span>账号 {{ record.accountEmail || '未知账号' }}</span>
+              </div>
             </div>
             <el-tag :type="statusTagType(record.status)" size="small">{{ statusLabel(record.status) }}</el-tag>
           </div>
@@ -94,6 +102,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import AppArtwork from './AppArtwork.vue'
 
 const API_BASE = '/api'
 
@@ -242,15 +251,6 @@ onMounted(loadRecords)
 .dark .queue-row {
   background: rgba(17, 24, 39, 0.72);
   border-color: rgba(71, 85, 105, 0.45);
-}
-
-.row-artwork {
-  width: 56px;
-  height: 56px;
-  flex-shrink: 0;
-  border-radius: 14px;
-  object-fit: cover;
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
 }
 
 .row-main {

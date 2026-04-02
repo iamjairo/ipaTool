@@ -1114,7 +1114,12 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
         token: account.token,
         appid: appid.value,
         appVerId: appVerId.value ? String(appVerId.value) : undefined,
-        autoPurchase: !!autoPurchase
+        autoPurchase: !!autoPurchase,
+        appName: props.selectedApp?.trackName || undefined,
+        bundleId: props.selectedApp?.bundleId || undefined,
+        appVersion: props.selectedApp?.version || undefined,
+        artworkUrl: props.selectedApp?.artworkUrl100 || props.selectedApp?.artworkUrl60 || undefined,
+        artistName: props.selectedApp?.artistName || undefined
       })
     })
     const data = await response.json()
@@ -1158,6 +1163,7 @@ const startDownloadWithProgress = async (autoPurchase = false) => {
       version: app.version || '',
       app: app,
       account: account,
+      accountEmail: account.email || '',
       status: 'downloading',
       progress: 0,
       logs: logs.value,

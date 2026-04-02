@@ -96,6 +96,11 @@ struct StartDownloadDirectRequest {
     token: String,
     appid: String,
     appVerId: Option<String>,
+    appName: Option<String>,
+    bundleId: Option<String>,
+    appVersion: Option<String>,
+    artworkUrl: Option<String>,
+    artistName: Option<String>,
     #[serde(default)]
     autoPurchase: bool,
 }
@@ -901,6 +906,11 @@ async fn start_download_direct(
 
     let appid = req.appid.clone();
     let app_ver_id = req.appVerId.clone();
+    let app_name_hint = req.appName.clone().filter(|value| !value.is_empty());
+    let bundle_id_hint = req.bundleId.clone().filter(|value| !value.is_empty());
+    let app_version_hint = req.appVersion.clone().filter(|value| !value.is_empty());
+    let artwork_url_hint = req.artworkUrl.clone().filter(|value| !value.is_empty());
+    let artist_name_hint = req.artistName.clone().filter(|value| !value.is_empty());
     let auto_purchase = req.autoPurchase;
     let account_email = account_store.account_email.clone();
     let job_for_task = job.clone();
@@ -970,13 +980,19 @@ async fn start_download_direct(
                             .as_ref()
                             .map(|item| item.bundle_display_name.clone())
                             .filter(|value| !value.is_empty())
+                            .or_else(|| app_name_hint.clone())
                             .unwrap_or(file_name),
                         app_id: appid.clone(),
-                        bundle_id: meta.as_ref().map(|item| item.bundle_id.clone()).filter(|value| !value.is_empty()),
+                        bundle_id: meta
+                            .as_ref()
+                            .map(|item| item.bundle_id.clone())
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| bundle_id_hint.clone()),
                         version: meta
                             .as_ref()
                             .map(|item| item.bundle_short_version_string.clone())
                             .filter(|value| !value.is_empty())
+                            .or_else(|| app_version_hint.clone())
                             .or_else(|| app_ver_id.clone()),
                         account_email: account_email.clone(),
                         account_region: None,
@@ -985,8 +1001,16 @@ async fn start_download_direct(
                         file_size: file_meta.map(|info| info.len() as i64),
                         file_path: Some(file_path.clone()),
                         install_url: None,
-                        artwork_url: meta.as_ref().map(|item| item.artwork_url.clone()).filter(|value| !value.is_empty()),
-                        artist_name: meta.as_ref().map(|item| item.artist_name.clone()).filter(|value| !value.is_empty()),
+                        artwork_url: meta
+                            .as_ref()
+                            .map(|item| item.artwork_url.clone())
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| artwork_url_hint.clone()),
+                        artist_name: meta
+                            .as_ref()
+                            .map(|item| item.artist_name.clone())
+                            .filter(|value| !value.is_empty())
+                            .or_else(|| artist_name_hint.clone()),
                         progress: Some(100),
                         error: None,
                         created_at: None,
