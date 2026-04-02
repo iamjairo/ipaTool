@@ -159,7 +159,7 @@ impl DownloadManager {
             let _start_time = Instant::now();
 
             match Self::download_with_resume(
-                downloads_dir,
+                downloads_dir.as_path(),
                 store,
                 app_id,
                 version,
@@ -170,8 +170,7 @@ impl DownloadManager {
             {
                 Ok(result) => {
                     // Record successful download
-                    if let Some(ref file_path) = result.file {
-                        let file_meta = std::fs::metadata(&file_path).ok();
+                    let file_meta = std::fs::metadata(file_path).ok();
                         let metadata = result.metadata;
                         let record = DownloadRecord {
                             id: None,
@@ -273,7 +272,7 @@ impl DownloadManager {
 
     // Resumable download
     async fn download_with_resume<S: AppleAuthService + Clone>(
-        downloads_dir: &PathBuf,
+        downloads_dir: &Path,
         store: &S,
         app_id: &str,
         version: Option<&str>,
