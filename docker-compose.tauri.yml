@@ -1,0 +1,148 @@
+# =============================================================================
+# ipaTool - Tauri Cross-Build Compose File
+#
+# Orchestrates building Tauri desktop artifacts for multiple target platforms
+# from your Synology NAS (DS220+, linux/amd64 host).
+#
+# Each service maps to one build target and writes artifacts to ./artifacts/.
+# Run one target at a time or use --profile to select a group.
+#
+# Quick start:
+#   # Linux amd64 (native, fastest)
+#   docker compose -f docker-compose.tauri.yml run --rm tauri-linux-amd64
+#
+#   # Windows x64 (MinGW cross-compiler, no SDK needed)
+#   docker compose -f docker-compose.tauri.yml run --rm tauri-windows-x64
+#
+#   # Linux arm64 (QEMU emulation - enable binfmt first, see README)
+#   docker compose -f docker-compose.tauri.yml run --rm tauri-linux-arm64
+#
+#   # macOS (requires MacOSX SDK - see Dockerfile.tauri header)
+#   docker compose -f docker-compose.tauri.yml run --rm tauri-macos-x64
+#   docker compose -f docker-compose.tauri.yml run --rm tauri-macos-arm64
+#
+# Artifacts land in: ./artifacts/<target>/
+# =============================================================================
+
+# Shared build defaults to keep each service DRY.
+x-tauri-build: &tauri-build
+  build:
+    context: .
+    dockerfile: Dockerfile.tauri
+    args:
+      NODE_VERSION: "20"
+      RUST_VERSION: "1.86"
+      PNPM_VERSION: "10"
+  volumes:
+    # Export directory: artifacts are written here by the build.
+    - ./artifacts:/artifacts:rw
+  # Do not start these on "docker compose up" - run them explicitly.
+  profiles: ["manual"]
+  # Containers exit on completion; no restart desired.
+  restart: "no"
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # linux/amd64 - AppImage + .deb (native, no cross-toolchain)
+  # ---------------------------------------------------------------------------
+  tauri-linux-amd64:
+    <<: *tauri-build
+    container_name: tauri-build-linux-amd64
+    build:
+      context: .
+      dockerfile: Dockerfile.tauri
+      target: exporter-linux-amd64
+      args:
+        NODE_VERSION: "20"
+        RUST_VERSION: "1.86"
+        PNPM_VERSION: "10"
+    # BuildKit must be enabled for the --output / scratch export trick.
+    # Alternatively, copy from the running container via:
+    #   docker cp tauri-build-linux-amd64:/artifacts ./artifacts
+    command: ["sh", "-c", "cp -r /artifacts/linux-amd64 /host-artifacts/ && echo 'Done: linux-amd64'"]
+    volumes:
+      - ./artifacts:/host-artifacts:rw
+
+  # ---------------------------------------------------------------------------
+  # linux/arm64 - AppImage + .deb via QEMU user-space emulation
+  # Prerequisite (run once on NAS):
+  #   docker run --privileged --rm tonistiigi/binfmt --install arm64
+  # ---------------------------------------------------------------------------
+  tauri-linux-arm64:
+    <<: *tauri-build
+    container_name: tauri-build-linux-arm64
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.tauri
+      target: exporter-linux-arm64
+      args:
+        NODE_VERSION: "20"
+        RUST_VERSION: "1.86"
+        PNPM_VERSION: "10"
+    command: ["sh", "-c", "cp -r /artifacts/linux-arm64 /host-artifacts/ && echo 'Done: linux-arm64'"]
+    volumes:
+      - ./artifacts:/host-artifacts:rw
+
+  # ---------------------------------------------------------------------------
+  # windows/amd64 - portable .exe via MinGW (x86_64-pc-windows-gnu)
+  # No Wine or Windows license required for compilation.
+  # Full NSIS .msi installer needs a Windows CI runner (GitHub Actions etc.)
+  # ---------------------------------------------------------------------------
+  tauri-windows-x64:
+    <<: *tauri-build
+    container_name: tauri-build-windows-x64
+    build:
+      context: .
+      dockerfile: Dockerfile.tauri
+      target: exporter-windows-x64
+      args:
+        NODE_VERSION: "20"
+        RUST_VERSION: "1.86"
+        PNPM_VERSION: "10"
+    command: ["sh", "-c", "cp -r /artifacts/windows-x64 /host-artifacts/ && echo 'Done: windows-x64'"]
+    volumes:
+      - ./artifacts:/host-artifacts:rw
+
+  # ---------------------------------------------------------------------------
+  # macos/x86_64 - .dmg via osxcross (requires MacOSX SDK - see Dockerfile.tauri)
+  # Place your SDK tar at: ./macos-sdk/MacOSX14.5.sdk.tar.xz
+  # ---------------------------------------------------------------------------
+  tauri-macos-x64:
+    <<: *tauri-build
+    container_name: tauri-build-macos-x64
+    build:
+      context: .
+      dockerfile: Dockerfile.tauri
+      target: exporter-macos-x64
+      args:
+        NODE_VERSION: "20"
+        RUST_VERSION: "1.86"
+        PNPM_VERSION: "10"
+        MACOS_SDK_PATH: "./macos-sdk/MacOSX14.5.sdk.tar.xz"
+        MACOS_SDK_VERSION: "14.5"
+    command: ["sh", "-c", "cp -r /artifacts/macos-x64 /host-artifacts/ && echo 'Done: macos-x64'"]
+    volumes:
+      - ./artifacts:/host-artifacts:rw
+
+  # ---------------------------------------------------------------------------
+  # macos/arm64 (Apple Silicon) - .dmg via osxcross
+  # Same SDK requirement as macos-x64.
+  # ---------------------------------------------------------------------------
+  tauri-macos-arm64:
+    <<: *tauri-build
+    container_name: tauri-build-macos-arm64
+    build:
+      context: .
+      dockerfile: Dockerfile.tauri
+      target: exporter-macos-arm64
+      args:
+        NODE_VERSION: "20"
+        RUST_VERSION: "1.86"
+        PNPM_VERSION: "10"
+        MACOS_SDK_PATH: "./macos-sdk/MacOSX14.5.sdk.tar.xz"
+        MACOS_SDK_VERSION: "14.5"
+    command: ["sh", "-c", "cp -r /artifacts/macos-arm64 /host-artifacts/ && echo 'Done: macos-arm64'"]
+    volumes:
+      - ./artifacts:/host-artifacts:rw
