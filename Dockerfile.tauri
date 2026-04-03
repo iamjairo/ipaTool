@@ -1,0 +1,322 @@
+# =============================================================================
+# ipaTool - Tauri Cross-Compilation Dockerfile
+#
+# Builds the Tauri desktop app (src-tauri/) for multiple target platforms
+# from your Synology NAS (linux/amd64 host).
+#
+# Supported build targets (set via --build-arg TARGET=<value>):
+#   linux-amd64   -> linux/x86_64 AppImage + .deb
+#   linux-arm64   -> linux/aarch64 AppImage + .deb  (QEMU emulation)
+#   windows-x64   -> Windows .exe + .msi            (MinGW cross-compile)
+#   macos-x64     -> macOS x86_64 .dmg              (osxcross, see NOTE below)
+#   macos-arm64   -> macOS Apple Silicon .dmg        (osxcross, see NOTE below)
+#
+# NOTE - macOS targets:
+#   Apple distributes the macOS SDK under a restricted license.
+#   You must supply your own MacOSX<version>.sdk.tar.xz extracted from Xcode.
+#   Place it at: ./macos-sdk/MacOSX14.5.sdk.tar.xz
+#   (or adjust MACOS_SDK_PATH below)
+#   Building macOS binaries OUTSIDE of macOS hardware is a legal grey area
+#   for distribution. Confirm compliance with your use case.
+#
+# Usage examples:
+#   docker build -f Dockerfile.tauri --build-arg TARGET=linux-amd64 \
+#     -t ipatool-tauri:linux-amd64 --output type=local,dest=./artifacts .
+#
+#   docker build -f Dockerfile.tauri --build-arg TARGET=windows-x64 \
+#     -t ipatool-tauri:win-x64 --output type=local,dest=./artifacts .
+#
+# Artifacts are exported to ./artifacts/<TARGET>/ on your host.
+# =============================================================================
+
+ARG TARGET=linux-amd64
+ARG NODE_VERSION=20
+ARG RUST_VERSION=1.86
+ARG PNPM_VERSION=10
+ARG MACOS_SDK_PATH=./macos-sdk/MacOSX14.5.sdk.tar.xz
+ARG MACOS_SDK_VERSION=14.5
+
+# =============================================================================
+# Stage 1 - base-tools
+# Common build tools shared by all targets.
+# =============================================================================
+FROM rust:${RUST_VERSION}-bullseye AS base-tools
+
+ARG NODE_VERSION
+ARG PNPM_VERSION
+
+# Install Node.js via NodeSource
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl \
+      ca-certificates \
+      gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_${NODE_VERSION}.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g pnpm@${PNPM_VERSION} --no-update-notifier \
+    && rm -rf /var/lib/apt/lists/*
+
+# Tauri CLI (installed globally as a Rust binary)
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    cargo install tauri-cli --version "^2" --locked
+
+# =============================================================================
+# Stage 2 - frontend-build
+# Build the Vue 3 frontend; the dist/ is shared into every target stage.
+# =============================================================================
+FROM base-tools AS frontend-build
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml .npmrc* ./
+
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store,id=pnpm_store \
+    pnpm install --frozen-lockfile
+
+COPY . .
+
+# Strip any remaining Chinese / CJK characters from source files.
+RUN find src -type f \( -name "*.vue" -o -name "*.js" -o -name "*.ts" \) \
+    -exec sed -i -E \
+      's/[\x{4E00}-\x{9FFF}\x{3400}-\x{4DBF}\x{FF00}-\x{FFEF}]//g' {} +
+
+RUN pnpm run build
+
+# =============================================================================
+# Stage 3a - tauri-linux-amd64
+# Native linux/x86_64 build. No cross-compiler needed.
+# =============================================================================
+FROM base-tools AS tauri-linux-amd64
+
+# Tauri Linux runtime / GUI dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libwebkit2gtk-4.1-dev \
+      libgtk-3-dev \
+      libappindicator3-dev \
+      librsvg2-dev \
+      patchelf \
+      libssl-dev \
+      pkg-config \
+      libglib2.0-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=frontend-build /app/dist           ./dist
+COPY --from=frontend-build /app/src-tauri      ./src-tauri
+COPY --from=frontend-build /app/src-tauri/tauri.conf.json ./src-tauri/tauri.conf.json
+COPY package.json ./
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    --mount=type=cache,target=/app/src-tauri/target,id=tauri_linux_amd64,sharing=locked \
+    cargo tauri build --config '{"build":{"frontendDist":"../dist"}}' && \
+    cp -r src-tauri/target/release/bundle /output
+
+# =============================================================================
+# Stage 3b - tauri-linux-arm64
+# Cross-compile for aarch64-unknown-linux-gnu using QEMU binfmt + rustup target.
+# On the NAS, enable binfmt_misc for arm64 first:
+#   docker run --privileged --rm tonistiigi/binfmt --install arm64
+# Then build with --platform linux/arm64 flag.
+# =============================================================================
+FROM --platform=linux/arm64 base-tools AS tauri-linux-arm64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libwebkit2gtk-4.1-dev \
+      libgtk-3-dev \
+      libappindicator3-dev \
+      librsvg2-dev \
+      patchelf \
+      libssl-dev \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=frontend-build /app/dist      ./dist
+COPY --from=frontend-build /app/src-tauri ./src-tauri
+COPY package.json ./
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    --mount=type=cache,target=/app/src-tauri/target,id=tauri_linux_arm64,sharing=locked \
+    cargo tauri build --config '{"build":{"frontendDist":"../dist"}}' && \
+    cp -r src-tauri/target/release/bundle /output
+
+# =============================================================================
+# Stage 3c - tauri-windows-x64
+# Cross-compile Windows .exe / .msi using the x86_64-pc-windows-gnu target
+# (MinGW toolchain). No Wine or Windows runtime required.
+# Limitation: Tauri's windows-specific features (NSIS installer, WebView2
+# bootstrapper) require the NSIS toolchain on a Windows host. The output
+# here is a portable .exe; use a CI runner (e.g. GitHub Actions Windows) for
+# the full NSIS .msi installer.
+# =============================================================================
+FROM base-tools AS tauri-windows-x64
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      gcc-mingw-w64-x86-64 \
+      g++-mingw-w64-x86-64 \
+      libssl-dev \
+      pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add the Windows Rust target
+RUN rustup target add x86_64-pc-windows-gnu
+
+# Cross-linker config for Cargo
+RUN mkdir -p /root/.cargo && cat >> /root/.cargo/config.toml <<'EOF'
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar     = "x86_64-w64-mingw32-ar"
+EOF
+
+WORKDIR /app
+
+COPY --from=frontend-build /app/dist      ./dist
+COPY --from=frontend-build /app/src-tauri ./src-tauri
+COPY package.json ./
+
+# Build portable Windows binary.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    --mount=type=cache,target=/app/src-tauri/target,id=tauri_win_x64,sharing=locked \
+    cargo tauri build \
+      --target x86_64-pc-windows-gnu \
+      --config '{"build":{"frontendDist":"../dist"}}' && \
+    mkdir -p /output && \
+    find src-tauri/target/x86_64-pc-windows-gnu/release -maxdepth 1 \
+         \( -name "*.exe" -o -name "*.msi" \) -exec cp {} /output/ \;
+
+# =============================================================================
+# Stage 3d - tauri-macos-x64
+# Cross-compile for macOS x86_64 via osxcross.
+# REQUIRED: Supply MacOSX<version>.sdk.tar.xz at MACOS_SDK_PATH (see top).
+#
+# This stage is skipped if the SDK file is absent.
+# =============================================================================
+FROM base-tools AS tauri-macos-x64
+
+ARG MACOS_SDK_VERSION=14.5
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang \
+      cmake \
+      libssl-dev \
+      libxml2-dev \
+      libbz2-dev \
+      zlib1g-dev \
+      patch \
+      git \
+      python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Build osxcross (Apple cross-compiler toolchain)
+RUN git clone --depth=1 https://github.com/tpoechtrager/osxcross /opt/osxcross
+
+COPY ${MACOS_SDK_PATH:-./macos-sdk/MacOSX14.5.sdk.tar.xz} \
+     /opt/osxcross/tarballs/
+
+RUN cd /opt/osxcross && \
+    UNATTENDED=1 SDK_VERSION=${MACOS_SDK_VERSION} \
+    ./build.sh 2>&1 | tail -20
+
+ENV PATH="/opt/osxcross/target/bin:${PATH}"
+
+# Add the macOS Rust target
+RUN rustup target add x86_64-apple-darwin
+
+RUN cat >> /root/.cargo/config.toml <<EOF
+[target.x86_64-apple-darwin]
+linker = "x86_64-apple-darwin23-clang"
+ar     = "x86_64-apple-darwin23-ar"
+EOF
+
+WORKDIR /app
+
+COPY --from=frontend-build /app/dist      ./dist
+COPY --from=frontend-build /app/src-tauri ./src-tauri
+COPY package.json ./
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    --mount=type=cache,target=/app/src-tauri/target,id=tauri_macos_x64,sharing=locked \
+    MACOSX_DEPLOYMENT_TARGET=11.0 \
+    cargo tauri build \
+      --target x86_64-apple-darwin \
+      --config '{"build":{"frontendDist":"../dist"}}' && \
+    mkdir -p /output && \
+    find src-tauri/target/x86_64-apple-darwin/release/bundle -name "*.dmg" \
+         -exec cp {} /output/ \;
+
+# =============================================================================
+# Stage 3e - tauri-macos-arm64
+# Cross-compile for Apple Silicon (aarch64-apple-darwin) via osxcross.
+# Same SDK requirement as Stage 3d.
+# =============================================================================
+FROM base-tools AS tauri-macos-arm64
+
+ARG MACOS_SDK_VERSION=14.5
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      clang \
+      cmake \
+      libssl-dev \
+      libxml2-dev \
+      libbz2-dev \
+      zlib1g-dev \
+      patch \
+      git \
+      python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth=1 https://github.com/tpoechtrager/osxcross /opt/osxcross
+
+COPY ${MACOS_SDK_PATH:-./macos-sdk/MacOSX14.5.sdk.tar.xz} \
+     /opt/osxcross/tarballs/
+
+RUN cd /opt/osxcross && \
+    UNATTENDED=1 SDK_VERSION=${MACOS_SDK_VERSION} \
+    ./build.sh 2>&1 | tail -20
+
+ENV PATH="/opt/osxcross/target/bin:${PATH}"
+
+RUN rustup target add aarch64-apple-darwin
+
+RUN cat >> /root/.cargo/config.toml <<EOF
+[target.aarch64-apple-darwin]
+linker = "aarch64-apple-darwin23-clang"
+ar     = "aarch64-apple-darwin23-ar"
+EOF
+
+WORKDIR /app
+
+COPY --from=frontend-build /app/dist      ./dist
+COPY --from=frontend-build /app/src-tauri ./src-tauri
+COPY package.json ./
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry,id=cargo_registry \
+    --mount=type=cache,target=/app/src-tauri/target,id=tauri_macos_arm64,sharing=locked \
+    MACOSX_DEPLOYMENT_TARGET=11.0 \
+    cargo tauri build \
+      --target aarch64-apple-darwin \
+      --config '{"build":{"frontendDist":"../dist"}}' && \
+    mkdir -p /output && \
+    find src-tauri/target/aarch64-apple-darwin/release/bundle -name "*.dmg" \
+         -exec cp {} /output/ \;
+
+# =============================================================================
+# Stage 4 - exporter
+# Thin scratch image; BuildKit --output extracts /artifacts to the host.
+# docker build ... --output type=local,dest=./artifacts .
+# =============================================================================
+FROM scratch AS exporter-linux-amd64
+COPY --from=tauri-linux-amd64 /output /artifacts/linux-amd64/
+
+FROM scratch AS exporter-linux-arm64
+COPY --from=tauri-linux-arm64 /output /artifacts/linux-arm64/
+
+FROM scratch AS exporter-windows-x64
+COPY --from=tauri-windows-x64 /output /artifacts/windows-x64/
+
+FROM scratch AS exporter-macos-x64
+COPY --from=tauri-macos-x64 /output /artifacts/macos-x64/
+
+FROM scratch AS exporter-macos-arm64
+COPY --from=tauri-macos-arm64 /output /artifacts/macos-arm64/
